@@ -14,7 +14,14 @@ What happens when you pit modern **Generative AI (Large Language Models)** again
 
 **PacMan-AI-Chronicles** is an empirical research sandbox and real-time visualization arena. It tests the provocative claim of using LLMs as *"System 1"* fast reflexive game controllers by comparing them head-to-head across **identical random seeds** against algorithms from every major era of AI history.
 
+> [!NOTE]
+> ### 🚧 Work in Progress & DQN Continuation Notice
+> This project is under active research and development. In particular, the **Deep Q-Network (DQN)** subsystem is in its Phase 1 checkpoint and **actively being continued**. 
+>
+> While our feature-optimized RL agent currently holds the top tournament score (926.2 pts), it relies on human-engineered topological features (graph BFS, junction detection, dead-end depth). In contrast, **DQN learns its entire representation and policy end-to-end directly from raw spatial grid tensors without human inductive bias**. Because it is unconstrained by human feature ceilings, an extended DQN policy is theoretically destined to become the definitive arena champion. See the [DQN Research Roadmap](#-ongoing-research--dqn-roadmap) below.
+
 ```text
+
  1980s - 1990s        1990s - 2000s          2000s - 2010s               2013 - 2015                2024 - 2026
 ┌──────────────┐     ┌──────────────┐     ┌───────────────────┐     ┌─────────────────────┐     ┌─────────────────┐
 │ Expert Rules │ ──> │ Classical RL │ ──> │ Policy Optim (ES) │ ──> │    Deep RL (DQN)    │ ──> │   System 1 LLM  │
@@ -62,6 +69,25 @@ All agents competed on the identical 19×21 maze layout across 1,000 determinist
 3. **End-to-End Visual Learning:** The Deep Q-Network learned spatial navigation from scratch in 12 minutes on CPU, achieving **570.0 pts** at 0.27 ms without any human feature engineering.
 
 ---
+
+## 🔬 Ongoing Research & DQN Roadmap
+
+### Why DQN Has the Highest Theoretical Ceiling
+In classical reinforcement learning, policy search methods (such as the Cross-Entropy Method) can quickly converge to high scores when supplied with **human-engineered features** (`dead_end_trap`, `safe_junction`, BFS distance maps). However, this introduces a hard limitation: **the policy's intelligence is strictly bounded by human domain knowledge and representation bias**.
+
+**The Deep Q-Network (DQN) operates on a fundamentally purer principle:**
+- **Zero Human Guidance:** It receives only a raw 4-channel spatial grid tensor (walls, Pac-Man, ghosts, pellets).
+- **Autonomous Representation Learning:** The convolutional filters learn their own spatial kernels for corridor recognition, proximity gradients, and escape pathways directly from Bellman temporal difference errors.
+- **Unbounded Potential:** In our initial Phase 1 training run (1,200 episodes, ~12 minutes on CPU), DQN already reached **570.0 points** and **0.27 ms inference**. Because its representation capacity is vast and unconstrained by linear assumptions, extended training is expected to surpass all handcrafted heuristics.
+
+### Phase 2 DQN Roadmap
+- [ ] **Prioritized Experience Replay (PER):** Transition from uniform replay buffer sampling to TD-error proportional sampling to accelerate learning on rare, critical ghost escape events.
+- [ ] **Dueling DQN Architecture:** Decouple state value estimation $V(s)$ from action advantages $A(s, a)$ to stabilize Q-values in non-critical corridors.
+- [ ] **Extended Training Runs:** Scale from 1,200 episodes to 5,000+ episodes with cosine learning rate scheduling.
+- [ ] **Multi-Frame Temporal Velocity:** Stack consecutive frames to allow the convolutional network to infer ghost velocity and direction directly from visual motion.
+
+---
+
 
 ## 🚀 Quickstart
 
