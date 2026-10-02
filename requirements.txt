@@ -1,0 +1,6 @@
+# Core Interactive Visualization & Game Loop
+pygame-ce>=2.5.0
+
+# Deep Q-Network (DQN) Neural Agent & State Tensor Operations
+torch>=2.0.0
+numpy>=1.24.0

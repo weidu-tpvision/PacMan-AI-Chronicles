@@ -1,0 +1,38 @@
+======================================================================
+ DEEP Q-NETWORK (DQN) TRAINING: Convolutional Neural Agent
+======================================================================
+Device: CPU | Batch Size: 64 | Learning Rate: 0.0005
+Episodes: 1200 | Target Sync: every 400 steps
+
+Warming up replay buffer with 1,000 baseline steps...
+Warm-up complete! Beginning DQN neural optimization...
+
+Ep 0050/1200 | Train Avg: -123.7 | Val Score: -140.0 (Pellets:  6.0) | eps: 0.88 | Time:   11s [* SAVED BEST]
+Ep 0100/1200 | Train Avg: -122.7 | Val Score:  -40.0 (Pellets: 16.0) | eps: 0.78 | Time:   24s [* SAVED BEST]
+Ep 0150/1200 | Train Avg: -113.0 | Val Score: -120.0 (Pellets:  8.0) | eps: 0.69 | Time:   37s
+Ep 0200/1200 | Train Avg: -102.3 | Val Score: -110.0 (Pellets:  9.0) | eps: 0.61 | Time:   53s
+Ep 0250/1200 | Train Avg:  -88.0 | Val Score: -100.0 (Pellets: 10.0) | eps: 0.53 | Time:   67s
+Ep 0300/1200 | Train Avg:  -87.0 | Val Score:  -10.0 (Pellets: 19.0) | eps: 0.47 | Time:   84s [* SAVED BEST]
+Ep 0350/1200 | Train Avg:  -83.3 | Val Score:  -10.0 (Pellets: 19.0) | eps: 0.42 | Time:  102s
+Ep 0400/1200 | Train Avg:  -60.0 | Val Score:   10.0 (Pellets: 21.0) | eps: 0.37 | Time:  124s [* SAVED BEST]
+Ep 0450/1200 | Train Avg:  -31.3 | Val Score:  -70.0 (Pellets: 13.0) | eps: 0.32 | Time:  149s
+Ep 0500/1200 | Train Avg:  -19.3 | Val Score:   30.0 (Pellets: 23.0) | eps: 0.29 | Time:  178s [* SAVED BEST]
+Ep 0550/1200 | Train Avg:   15.0 | Val Score:   20.0 (Pellets: 22.0) | eps: 0.25 | Time:  208s
+Ep 0600/1200 | Train Avg:   38.7 | Val Score:  120.0 (Pellets: 32.0) | eps: 0.22 | Time:  238s [* SAVED BEST]
+Ep 0650/1200 | Train Avg:   47.0 | Val Score:  140.0 (Pellets: 34.0) | eps: 0.20 | Time:  270s [* SAVED BEST]
+Ep 0700/1200 | Train Avg:   78.3 | Val Score:  310.0 (Pellets: 51.0) | eps: 0.17 | Time:  299s [* SAVED BEST]
+Ep 0750/1200 | Train Avg:  133.0 | Val Score:  260.0 (Pellets: 46.0) | eps: 0.15 | Time:  337s
+Ep 0800/1200 | Train Avg:  169.0 | Val Score:  240.0 (Pellets: 44.0) | eps: 0.13 | Time:  378s
+Ep 0850/1200 | Train Avg:  141.3 | Val Score:  240.0 (Pellets: 44.0) | eps: 0.12 | Time:  420s
+Ep 0900/1200 | Train Avg:  166.0 | Val Score:  240.0 (Pellets: 44.0) | eps: 0.11 | Time:  462s
+Ep 0950/1200 | Train Avg:  199.3 | Val Score:  290.0 (Pellets: 49.0) | eps: 0.09 | Time:  506s
+Ep 1000/1200 | Train Avg:  222.7 | Val Score:  550.0 (Pellets: 55.0) | eps: 0.08 | Time:  550s [* SAVED BEST]
+Ep 1050/1200 | Train Avg:  290.7 | Val Score:  560.0 (Pellets: 56.0) | eps: 0.07 | Time:  600s [* SAVED BEST]
+Ep 1100/1200 | Train Avg:  117.7 | Val Score:  570.0 (Pellets: 57.0) | eps: 0.06 | Time:  643s [* SAVED BEST]
+Ep 1150/1200 | Train Avg:  176.0 | Val Score:   30.0 (Pellets: 23.0) | eps: 0.06 | Time:  686s
+Ep 1200/1200 | Train Avg:  155.0 | Val Score:  -70.0 (Pellets: 13.0) | eps: 0.05 | Time:  724s
+
+======================================================================
+ TRAINING COMPLETE! Best Checkpoint Saved to dqn_pacman.pt
+ Best Validation Score: 570.0
+======================================================================
