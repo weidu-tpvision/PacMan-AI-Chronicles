@@ -8,7 +8,9 @@ from rl.dqn_model import (
     ACTION_TO_IDX,
     IDX_TO_ACTION,
     PacmanDQN,
+    encode_frame,
     encode_state,
+    FRAME_STACK_SIZE,
 )
 
 __all__ = [
@@ -16,5 +18,7 @@ __all__ = [
     "ACTION_TO_IDX",
     "IDX_TO_ACTION",
     "PacmanDQN",
+    "encode_frame",
     "encode_state",
+    "FRAME_STACK_SIZE",
 ]

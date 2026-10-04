@@ -2,16 +2,24 @@
 Deep Q-Network Agent: Executes forward passes on the trained PyTorch CNN model.
 """
 
+import collections
 import os
 import random
 import time
 from typing import List, Optional, Tuple
 
+import numpy as np
 from agents.base import DecisionResult, softmax
 
 try:
     import torch
-    from rl.dqn_model import ACTION_TO_IDX, PacmanDQN, encode_state
+    from rl.dqn_model import (
+        ACTION_TO_IDX,
+        FRAME_STACK_SIZE,
+        PacmanDQN,
+        encode_frame,
+        encode_state,
+    )
     TORCH_AVAILABLE = True
 except ImportError:
     TORCH_AVAILABLE = False
@@ -32,21 +40,25 @@ def _resolve_model_path(filename: str) -> str:
 
 
 class DQNAgent:
-    """Deep Q-Network Agent running a convolutional neural network forward pass."""
+    """Deep Q-Network Agent running a convolutional neural network with temporal frame stacking."""
 
     def __init__(
         self,
         model_path: str = "dqn_pacman.pt",
         name: str = "Deep Q-Network (DQN)",
+        k: int = FRAME_STACK_SIZE,
     ):
         self.name = name
         self.category = "Deep Neural RL (PyTorch CNN)"
+        self.k = k
+        self.frame_buffer = collections.deque(maxlen=self.k)
+        self.last_pos = None
         self.model_loaded = False
         self.model = None
 
         if TORCH_AVAILABLE:
             self.device = torch.device("cpu")
-            self.model = PacmanDQN().to(self.device)
+            self.model = PacmanDQN(in_channels=self.k).to(self.device)
             resolved = _resolve_model_path(model_path)
             if os.path.exists(resolved):
                 try:
@@ -57,6 +69,11 @@ class DQNAgent:
                 except Exception:
                     pass
             self.model.eval()
+
+    def reset(self):
+        """Reset temporal frame buffer for a new game episode."""
+        self.frame_buffer.clear()
+        self.last_pos = None
 
     def decide(
         self,
@@ -72,7 +89,18 @@ class DQNAgent:
             m = random.choice(legal_moves) if legal_moves else "left"
             return DecisionResult(m, {m: 1.0}, 1.0, 0.05, False)
 
-        state_arr = encode_state(pacman_pos, ghost_positions, pellets)
+        curr_frame = encode_frame(pacman_pos, ghost_positions, pellets)
+
+        # Detect new episode or empty buffer
+        if len(self.frame_buffer) == 0:
+            for _ in range(self.k):
+                self.frame_buffer.append(curr_frame)
+        else:
+            self.frame_buffer.append(curr_frame)
+
+        self.last_pos = pacman_pos
+        state_arr = np.stack(self.frame_buffer, axis=0)
+
         with torch.no_grad():
             s_tensor = torch.from_numpy(state_arr).unsqueeze(0).to(self.device)
             raw_q = self.model(s_tensor).squeeze(0)
