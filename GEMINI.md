@@ -109,11 +109,32 @@ Each time step renders the $21 \times 19$ maze into a single 2D plane using natu
 * **Loss**: Smooth L1 (Huber) Loss with gradient norm clipping (`max_norm = 5.0`).
 * **Optimizer**: Adam ($\text{lr} = 5 \times 10^{-4}$).
 
+## 🐍 Python Virtual Environment & Runtime Setup
+
+> [!IMPORTANT]
+> **Pre-Configured Virtual Environment**:
+> All project runtime dependencies (`torch`, `pygame-ce`, `numpy`) are installed and maintained in the dedicated virtual environment located at:
+> * **Path**: `C:\Users\wei.du\venv\systemone` (or `$HOME\venv\systemone`)
+> * **Interpreter**: `C:\Users\wei.du\venv\systemone\Scripts\python.exe`
+>
+> **Caution**: The system's default global Python (`AppData\Local\Microsoft\WindowsApps\python.exe` / Python 3.14) lacks `torch` and `pygame`. Always run scripts using the `systemone` virtual environment to prevent `ModuleNotFoundError`.
+>
+> **Usage Options**:
+> * **Direct PowerShell execution**:
+>   ```powershell
+>   & "C:\Users\wei.du\venv\systemone\Scripts\python.exe" tests/test_agents.py
+>   ```
+> * **Shell Activation**:
+>   ```powershell
+>   & "C:\Users\wei.du\venv\systemone\Scripts\Activate.ps1"
+>   python tests/test_agents.py
+>   ```
+
 ---
 
 ## 🛠️ Common Developer Commands
 
-All commands should be executed within the virtual environment (e.g. `C:\Users\wei.du\venv\systemone` or local `venv`):
+All commands should be executed within the `systemone` virtual environment:
 
 ```bash
 # 1. Run Automated Test Suite

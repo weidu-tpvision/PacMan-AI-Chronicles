@@ -107,6 +107,9 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
+> [!TIP]
+> On the development host, a pre-configured virtual environment containing all required dependencies (`torch`, `pygame-ce`, `numpy`) is located at `C:\Users\wei.du\venv\systemone` (accessible directly via `& "C:\Users\wei.du\venv\systemone\Scripts\python.exe"`).
+
 ### 2. Launch the Interactive Pygame Arena
 
 ```bash
