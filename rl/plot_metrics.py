@@ -9,7 +9,6 @@ import os
 from typing import Dict, List
 
 try:
-    os.environ["SDL_VIDEODRIVER"] = "dummy"
     import pygame
     PYGAME_AVAILABLE = True
 except Exception:
@@ -158,7 +157,7 @@ def generate_png(metrics: List[Dict], output_png_path: str):
     if not PYGAME_AVAILABLE:
         return
 
-    pygame.init()
+    pygame.font.init()
     w, h = 1100, 750
     surf = pygame.Surface((w, h))
     surf.fill((15, 20, 28))  # Dark background

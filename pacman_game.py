@@ -74,6 +74,10 @@ class PacmanGame:
         speed: float = 6.0,
         initial_agent_idx: int = 1,
     ):
+        # Ensure display driver uses native OS window (defend against headless dummy flags)
+        if os.environ.get("SDL_VIDEODRIVER") == "dummy":
+            os.environ.pop("SDL_VIDEODRIVER", None)
+
         pygame.init()
         pygame.display.set_caption("PacMan-AI-Chronicles | 40 Years of AI Decision Paradigms")
 
