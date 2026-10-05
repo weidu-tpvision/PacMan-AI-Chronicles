@@ -27,7 +27,7 @@ try:
 except ImportError:
     TORCH_AVAILABLE = False
 
-from core.maze_data import GRID_WIDTH, OPPOSITE_DIRECTIONS
+from core.maze_data import DIRECTIONS, GRID_WIDTH, OPPOSITE_DIRECTIONS
 
 
 def _resolve_model_path(filename: str) -> str:
@@ -58,6 +58,8 @@ class DQNAgent:
         self.k = k
         self.prev_pacman: Optional[Tuple[int, int]] = None
         self.prev_ghosts: Optional[List[Tuple[int, int]]] = None
+        self.recent_positions = collections.deque(maxlen=16)
+        self.last_pellet_count: Optional[int] = None
         self.model_loaded = False
         self.model = None
 
@@ -79,6 +81,8 @@ class DQNAgent:
         """Reset temporal state tracking for a new game episode."""
         self.prev_pacman = None
         self.prev_ghosts = None
+        self.recent_positions.clear()
+        self.last_pellet_count = None
 
     def decide(
         self,
@@ -102,6 +106,14 @@ class DQNAgent:
             if dx + dy > 2:
                 self.prev_pacman = None
                 self.prev_ghosts = None
+                self.recent_positions.clear()
+
+        # Update visit history to detect and break local corridor loops
+        curr_pellets = len(pellets)
+        if self.last_pellet_count is None or curr_pellets < self.last_pellet_count:
+            self.recent_positions.clear()
+            self.last_pellet_count = curr_pellets
+        self.recent_positions.append(pacman_pos)
 
         state_arr = encode_state(
             pacman_pos=pacman_pos,
@@ -124,6 +136,17 @@ class DQNAgent:
             opp = OPPOSITE_DIRECTIONS.get(last_move)
             if opp in legal_q:
                 legal_q[opp] -= 1.0
+
+        # Anti-orbit penalty: if a move steps into a tile visited multiple times without collecting food,
+        # apply a penalty to break out of empty corridor cycles
+        if len(legal_moves) > 1 and len(self.recent_positions) >= 4:
+            for m in legal_moves:
+                dx, dy = DIRECTIONS[m]
+                nx = (pacman_pos[0] + dx) % GRID_WIDTH
+                ny = pacman_pos[1] + dy
+                visit_count = self.recent_positions.count((nx, ny))
+                if visit_count >= 2:
+                    legal_q[m] -= visit_count * 20.0
 
         best_q = max(legal_q.values())
         best_moves = [m for m in legal_moves if legal_q[m] == best_q]

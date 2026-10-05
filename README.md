@@ -82,7 +82,8 @@ In classical reinforcement learning, policy search methods (such as the Cross-En
 
 ### Phase 2 DQN Roadmap
 - [x] **Unentangled Multi-Channel Frame Stacking (6 Channels)**: Separated discrete binary channels for Walls, Pellets, Pac-Man $(t, t-1)$, and Ghosts $(t, t-1)$ to eliminate ReLU sign ambiguity while capturing velocity vectors.
-- [x] **Global Receptive Field Pooling & Momentum Shaping**: 10×10 pooling for global pellet perception, anti-stall loop cutoff, and directional momentum preservation.
+- [x] **Global Receptive Field Pooling & Momentum Shaping**: 10×10 pooling for global pellet perception, anti-stall loop cutoff, directional momentum preservation, and inference anti-orbit dynamic memory.
+- [x] **Standardized Simulation Engine & Authentic Arcade Dynamics**: Unified single simulation engine (`core.environment.Environment`) across desktop Pygame, web arena, training, and tournaments with authentic 28/7 Chase/Scatter cycling and seeded RNG.
 - [x] **Automated Training Diagnostics**: Real-time metrics logging and 4-panel visual figure generation (vector SVG and raster PNG).
 - [ ] **Prioritized Experience Replay (PER)**: Transition from uniform replay buffer sampling to TD-error proportional sampling to accelerate learning on rare, critical ghost escape events.
 - [ ] **Dueling DQN Architecture**: Decouple state value estimation $V(s)$ from action advantages $A(s, a)$ to stabilize Q-values in non-critical corridors.

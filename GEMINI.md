@@ -95,6 +95,7 @@ Rather than compressing objects into a scalar matrix where negative values colli
 * By cross-correlating Channels $(2, 4)$ and $(3, 5)$, 2D convolutional kernels directly compute **velocity vectors $(\Delta x, \Delta y)$ and headings** for both Pac-Man and all ghosts without hand-crafted physics.
 * **Momentum Regulation**: Inverse direction penalties during exploration ($-1.5$) and inference (`legal_q[opp] -= 1.0`) prevent micro-oscillations between adjacent empty corridor cells.
 * **Anti-Stall Cutoff**: A 45-step inactive loop cutoff during training ($-50.0$ penalty) prevents empty corridors from becoming infinite orbit havens.
+* **Anti-Orbit Dynamic Memory**: A 16-step rolling position buffer (`recent_positions`) tracks repeated tile visits during inference. When no pellets have been eaten and a candidate move leads into repeatedly visited empty corridors ($\ge 2$ visits), a scaled loop penalty (`visit_count * 20.0`) is subtracted, allowing the agent to exit local corridor limit cycles without retraining.
 
 ### 3. Global Receptive Field Neural Architecture (`PacmanDQN`)
 * **Input**: `(batch, 6, 21, 19)`
@@ -135,6 +136,12 @@ Every DQN training run must follow this standardized automated diagnostic and an
 * **Zero Blunder Evasion via Binary Orthogonality**: Unentangling walls and hazards into separate binary $\{0.0, 1.0\}$ planes eliminated the $3.2\%$ blunder regression of the scalar frame-stack, achieving a strict **$0.0\%$ blunder rate** across 100 tournament seeds.
 * **Loss Convergence**: Huber loss monotonically decreased from $12.16$ in Q2 down to $6.89$ in Q4. Gradient norm clipping at $5.0$ effectively stabilized Bellman target updates against large collision penalties ($-150$).
 * **Peak Policy Checkpoint**: The best validation checkpoint was reached at **Episode 550** (Validation score: **$500.0\text{ pts}$**, **$50.0\text{ pellets}$**), saved to [`rl/weights/dqn_pacman.pt`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/rl/weights/dqn_pacman.pt).
+
+### 6. Standardized Simulation Engine (`core.environment.Environment`)
+* **Single Source of Truth**: All game arenas ([`pacman_game.py`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/pacman_game.py), [`web_arena.py`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/web_arena.py)), training pipelines ([`rl/train_dqn.py`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/rl/train_dqn.py), [`rl/train_q_learning.py`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/rl/train_q_learning.py), [`rl/optimize_policy.py`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/rl/optimize_policy.py)), and tournament runners ([`compare_baselines.py`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/compare_baselines.py)) share the exact same `core.environment.Environment` engine.
+* **Arcade Scatter / Chase Dynamics**: Ghosts cycle between 28 steps in Chase Mode (direct pursuit, ambush, flanking) and 7 steps in Scatter Mode (heading to designated home corners), faithfully replicating Namco 1980 arcade behavior and naturally shattering static phase-locked stalemates.
+* **Seeded Reproducibility**: Each environment instance uses an isolated `self.rng = random.Random(seed)` with subtle ($10\%$) junction exploration noise, guaranteeing that tournament benchmarks evaluate diverse, realistic game trajectories across seeds while remaining fully reproducible.
+* **Episodic & Life-Loss Reset**: When Pac-Man loses a life or resets, calling `agent.reset()` immediately purges temporal velocity buffers, preventing corrupted post-respawn momentum vectors.
 
 ## 🐍 Python Virtual Environment & Runtime Setup
 

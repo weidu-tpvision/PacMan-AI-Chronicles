@@ -31,6 +31,7 @@ from agents import (
     SystemOneBaselineAgent,
     TrainedQLearningAgent,
 )
+from core.environment import Environment
 from core.maze_data import (
     DIRECTIONS,
     GRID_HEIGHT,
@@ -198,25 +199,19 @@ class PacmanGame:
         for c in self.controllers:
             if hasattr(c["agent"], "reset"):
                 c["agent"].reset()
-        self.pacman_pos = list(START_POSITIONS["pacman"])
+
+        self.env = Environment()
+        self.pacman_pos = list(self.env.pacman_pos)
         self.pacman_visual = [float(self.pacman_pos[0]), float(self.pacman_pos[1])]
         self.pacman_dir = "left"
         self.last_move = "left"
 
-        self.ghost_positions = [list(g) for g in START_POSITIONS["ghosts"]]
+        self.ghost_positions = [list(g) for g in self.env.ghost_positions]
         self.ghost_visuals = [[float(g[0]), float(g[1])] for g in self.ghost_positions]
-        self.ghost_dirs = ["up", "up", "up"]
+        self.ghost_dirs = list(self.env.ghost_dirs)
 
-        self.walls = set()
-        self.pellets = set()
-        for y, row in enumerate(MAZE_LAYOUT):
-            for x, char in enumerate(row):
-                if char == "#":
-                    self.walls.add((x, y))
-                elif char == ".":
-                    if (x, y) != tuple(START_POSITIONS["pacman"]):
-                        self.pellets.add((x, y))
-
+        self.walls = self.env.walls
+        self.pellets = self.env.pellets
         self.initial_pellet_count = len(self.pellets)
         self.score = 0
         self.lives = 3
@@ -227,16 +222,7 @@ class PacmanGame:
         self.move_history.clear()
 
     def get_legal_moves(self, x: int, y: int) -> List[str]:
-        legal = []
-        for d, (dx, dy) in DIRECTIONS.items():
-            nx, ny = x + dx, y + dy
-            if nx < 0:
-                nx = GRID_WIDTH - 1
-            elif nx >= GRID_WIDTH:
-                nx = 0
-            if (nx, ny) not in self.walls:
-                legal.append(d)
-        return legal
+        return self.env.get_legal_moves(x, y)
 
     def start_decision_query(self, legal_moves: List[str]):
         """Run decision query in background thread."""
@@ -259,101 +245,6 @@ class PacmanGame:
                 self.pending_decision = False
 
         threading.Thread(target=worker, daemon=True).start()
-
-    def step_ghosts(self) -> List[List[int]]:
-        px, py = self.pacman_pos
-        new_ghost_positions = []
-        pdx, pdy = DIRECTIONS.get(self.pacman_dir, (0, 0))
-
-        for i, gpos in enumerate(self.ghost_positions):
-            gx, gy = gpos
-            legal = self.get_legal_moves(gx, gy)
-            if not legal:
-                new_ghost_positions.append(gpos)
-                continue
-
-            current_dir = self.ghost_dirs[i]
-            opp = OPPOSITE_DIRECTIONS.get(current_dir)
-            filtered_legal = [m for m in legal if m != opp] or legal
-
-            # Distinct ghost personalities to diversify pursuit paths:
-            # Ghost 0 (Red / Blinky): Aggressive direct chaser targeting Pac-Man
-            # Ghost 1 (Pink / Pinky): Ambush target 3 tiles ahead of Pac-Man's heading
-            # Ghost 2 (Orange / Clyde): Pincer flanker cutting off retreat (2 tiles behind) or scattering when close
-            if i == 0:
-                tx, ty = px, py
-            elif i == 1:
-                tx, ty = px + pdx * 3, py + pdy * 3
-            else:
-                dist = abs(gx - px) + abs(gy - py)
-                if dist > 5:
-                    tx, ty = px - pdx * 2, py - pdy * 2
-                else:
-                    tx, ty = 1, GRID_HEIGHT - 2
-
-            # Mutual collision avoidance: penalize stepping into tiles claimed by other ghosts
-            claimed_tiles = {tuple(p) for p in new_ghost_positions}
-            unmoved_tiles = {
-                tuple(self.ghost_positions[j])
-                for j in range(i + 1, len(self.ghost_positions))
-            }
-
-            def score_ghost_move(m: str) -> float:
-                dx, dy = DIRECTIONS[m]
-                nx = (gx + dx) % GRID_WIDTH
-                ny = gy + dy
-
-                # Manhattan distance to target
-                score = abs(nx - tx) + abs(ny - ty)
-
-                # Heavy penalty for stepping on another ghost's tile to prevent merging
-                if (nx, ny) in claimed_tiles:
-                    score += 500.0
-                elif (nx, ny) in unmoved_tiles:
-                    score += 80.0
-
-                return score
-
-            best_m = min(filtered_legal, key=score_ghost_move)
-
-            dx, dy = DIRECTIONS[best_m]
-            nx, ny = (gx + dx) % GRID_WIDTH, gy + dy
-
-            new_ghost_positions.append([nx, ny])
-            self.ghost_dirs[i] = best_m
-
-        return new_ghost_positions
-
-    def check_collisions(
-        self,
-        old_pac: List[int],
-        new_pac: List[int],
-        old_ghosts: List[List[int]],
-        new_ghosts: List[List[int]],
-    ) -> bool:
-        for i in range(len(new_ghosts)):
-            if new_pac == new_ghosts[i]:
-                return self._handle_collision()
-            if old_pac == new_ghosts[i] and new_pac == old_ghosts[i]:
-                return self._handle_collision()
-        return False
-
-    def _handle_collision(self) -> bool:
-        self.lives -= 1
-        self.collision_flash = 20
-        if self.lives <= 0:
-            self.game_over = True
-        else:
-            self.pacman_pos = list(START_POSITIONS["pacman"])
-            self.pacman_visual = [
-                float(self.pacman_pos[0]),
-                float(self.pacman_pos[1]),
-            ]
-            self.ghost_positions = [list(g) for g in START_POSITIONS["ghosts"]]
-            self.ghost_visuals = [
-                [float(g[0]), float(g[1])] for g in self.ghost_positions
-            ]
-        return True
 
     def update(self, dt: float):
         if self.banner_timer > 0:
@@ -410,33 +301,42 @@ class PacmanGame:
                 self.active_decision = decision  # Store active decision for telemetry display
 
                 chosen_move = decision.choice
-                dx, dy = DIRECTIONS.get(chosen_move, (0, 0))
-                old_pac = list(self.pacman_pos)
-                nx, ny = old_pac[0] + dx, old_pac[1] + dy
+                legal = self.env.get_legal_moves(self.pacman_pos[0], self.pacman_pos[1])
+                if chosen_move in legal:
+                    collided, ate, won = self.env.step(chosen_move)
 
-                if nx < 0:
-                    nx = GRID_WIDTH - 1
-                elif nx >= GRID_WIDTH:
-                    nx = 0
-
-                if (nx, ny) not in self.walls:
-                    old_ghosts = [list(g) for g in self.ghost_positions]
-                    new_ghosts = self.step_ghosts()
-
-                    self.pacman_pos = [nx, ny]
-                    self.ghost_positions = new_ghosts
+                    self.pacman_pos = list(self.env.pacman_pos)
+                    self.ghost_positions = [list(g) for g in self.env.ghost_positions]
+                    self.ghost_dirs = list(self.env.ghost_dirs)
                     self.pacman_dir = chosen_move
                     self.last_move = chosen_move
                     self.move_count += 1
                     self.move_history.append((self.move_count, chosen_move, decision.confidence, decision.latency_ms))
 
-                    if (nx, ny) in self.pellets:
-                        self.pellets.remove((nx, ny))
+                    if ate:
                         self.score += 10
-                        if len(self.pellets) == 0:
-                            self.victory = True
+                    if won:
+                        self.victory = True
 
-                    self.check_collisions(old_pac, [nx, ny], old_ghosts, new_ghosts)
+                    if collided:
+                        self.lives -= 1
+                        self.collision_flash = 20
+                        if self.lives <= 0:
+                            self.game_over = True
+                        else:
+                            # Reset entity positions in Environment and visual arena
+                            self.env.pacman_pos = list(START_POSITIONS["pacman"])
+                            self.env.ghost_positions = [list(g) for g in START_POSITIONS["ghosts"]]
+                            self.env.ghost_dirs = ["up", "up", "up"]
+                            self.env.last_move = "left"
+                            self.pacman_pos = list(self.env.pacman_pos)
+                            self.ghost_positions = [list(g) for g in self.env.ghost_positions]
+                            self.ghost_dirs = list(self.env.ghost_dirs)
+                            self.pacman_visual = [float(self.pacman_pos[0]), float(self.pacman_pos[1])]
+                            self.ghost_visuals = [[float(g[0]), float(g[1])] for g in self.ghost_positions]
+                            # CRITICAL: reset agent temporal velocity tracking on respawn!
+                            if hasattr(self.current_controller["agent"], "reset"):
+                                self.current_controller["agent"].reset()
 
                     if self.step_once:
                         self.step_once = False
