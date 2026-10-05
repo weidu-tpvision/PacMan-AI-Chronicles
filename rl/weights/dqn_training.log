@@ -7,32 +7,32 @@ Episodes: 1200 | Target Sync: every 400 steps
 Warming up replay buffer with 1,000 baseline steps...
 Warm-up complete! Beginning DQN neural optimization...
 
-Ep 0050/1200 | Train Avg: -123.0 | Val Score:  -60.0 (Pellets: 14.0) | eps: 0.88 | Time:   23s [* SAVED BEST]
-Ep 0100/1200 | Train Avg: -110.0 | Val Score:  100.0 (Pellets: 30.0) | eps: 0.78 | Time:   50s [* SAVED BEST]
-Ep 0150/1200 | Train Avg: -105.7 | Val Score:  300.0 (Pellets: 30.0) | eps: 0.69 | Time:   75s [* SAVED BEST]
-Ep 0200/1200 | Train Avg:  -95.0 | Val Score:  -30.0 (Pellets: 17.0) | eps: 0.61 | Time:   98s
-Ep 0250/1200 | Train Avg:  -76.0 | Val Score:  -40.0 (Pellets: 16.0) | eps: 0.53 | Time:  127s
-Ep 0300/1200 | Train Avg:  -44.0 | Val Score:  100.0 (Pellets: 30.0) | eps: 0.47 | Time:  160s
-Ep 0350/1200 | Train Avg:  -46.7 | Val Score:  130.0 (Pellets: 33.0) | eps: 0.42 | Time:  198s
-Ep 0400/1200 | Train Avg:   -5.3 | Val Score:  150.0 (Pellets: 35.0) | eps: 0.37 | Time:  247s
-Ep 0450/1200 | Train Avg:   23.3 | Val Score:  230.0 (Pellets: 43.0) | eps: 0.32 | Time:  299s
-Ep 0500/1200 | Train Avg:   30.0 | Val Score:  300.0 (Pellets: 50.0) | eps: 0.29 | Time:  347s
-Ep 0550/1200 | Train Avg:   -9.7 | Val Score:  500.0 (Pellets: 50.0) | eps: 0.25 | Time:  387s [* SAVED BEST]
-Ep 0600/1200 | Train Avg:  -33.3 | Val Score:  230.0 (Pellets: 43.0) | eps: 0.22 | Time:  430s
-Ep 0650/1200 | Train Avg:   37.3 | Val Score:  -10.0 (Pellets: 19.0) | eps: 0.20 | Time:  482s
-Ep 0700/1200 | Train Avg:  141.3 | Val Score:  270.0 (Pellets: 47.0) | eps: 0.17 | Time:  544s
-Ep 0750/1200 | Train Avg:  209.7 | Val Score:  360.0 (Pellets: 56.0) | eps: 0.15 | Time:  617s
-Ep 0800/1200 | Train Avg:  166.7 | Val Score:  280.0 (Pellets: 48.0) | eps: 0.13 | Time:  698s
-Ep 0850/1200 | Train Avg:  223.3 | Val Score:  270.0 (Pellets: 47.0) | eps: 0.12 | Time:  784s
-Ep 0900/1200 | Train Avg:  122.3 | Val Score:  320.0 (Pellets: 52.0) | eps: 0.11 | Time:  861s
-Ep 0950/1200 | Train Avg:  178.3 | Val Score:  350.0 (Pellets: 55.0) | eps: 0.09 | Time:  928s
-Ep 1000/1200 | Train Avg:   10.7 | Val Score:  290.0 (Pellets: 49.0) | eps: 0.08 | Time:  991s
-Ep 1050/1200 | Train Avg:  -11.0 | Val Score:    0.0 (Pellets: 20.0) | eps: 0.07 | Time: 1056s
-Ep 1100/1200 | Train Avg:   21.0 | Val Score: -130.0 (Pellets:  7.0) | eps: 0.06 | Time: 1122s
-Ep 1150/1200 | Train Avg:  229.3 | Val Score:  200.0 (Pellets: 40.0) | eps: 0.06 | Time: 1201s
-Ep 1200/1200 | Train Avg:  209.0 | Val Score:  330.0 (Pellets: 53.0) | eps: 0.05 | Time: 1274s
+Ep 0050/1200 | Train Avg: -103.0 | Val Score:  -92.0 (Pellets: 10.8) | eps: 0.88 | Time:   73s [* SAVED BEST]
+Ep 0100/1200 | Train Avg:  -96.7 | Val Score:   88.0 (Pellets: 28.8) | eps: 0.78 | Time:  159s [* SAVED BEST]
+Ep 0150/1200 | Train Avg:  -72.3 | Val Score:  -71.0 (Pellets: 12.9) | eps: 0.69 | Time:  261s
+Ep 0200/1200 | Train Avg:  -83.7 | Val Score:  -57.0 (Pellets: 14.3) | eps: 0.61 | Time:  354s
+Ep 0250/1200 | Train Avg:  -73.3 | Val Score:  104.0 (Pellets: 30.4) | eps: 0.53 | Time:  438s [* SAVED BEST]
+Ep 0300/1200 | Train Avg:  -28.3 | Val Score:   49.0 (Pellets: 24.9) | eps: 0.47 | Time:  538s
+Ep 0350/1200 | Train Avg:   -7.0 | Val Score:   92.0 (Pellets: 29.2) | eps: 0.42 | Time:  652s
+Ep 0400/1200 | Train Avg:   38.3 | Val Score:  148.0 (Pellets: 34.8) | eps: 0.37 | Time:  794s [* SAVED BEST]
+Ep 0450/1200 | Train Avg:    5.0 | Val Score:   44.0 (Pellets: 24.4) | eps: 0.32 | Time:  911s
+Ep 0500/1200 | Train Avg:   -9.0 | Val Score:   97.0 (Pellets: 29.7) | eps: 0.29 | Time: 1010s
+Ep 0550/1200 | Train Avg:  -17.7 | Val Score:   86.0 (Pellets: 28.6) | eps: 0.25 | Time: 1056s
+Ep 0600/1200 | Train Avg:    5.7 | Val Score:   93.0 (Pellets: 29.3) | eps: 0.22 | Time: 1116s
+Ep 0650/1200 | Train Avg:  -28.3 | Val Score:  -19.0 (Pellets: 18.1) | eps: 0.20 | Time: 1171s
+Ep 0700/1200 | Train Avg:  -85.0 | Val Score:  -57.0 (Pellets: 14.3) | eps: 0.17 | Time: 1205s
+Ep 0750/1200 | Train Avg:  -37.0 | Val Score:  -57.0 (Pellets: 14.3) | eps: 0.15 | Time: 1266s
+Ep 0800/1200 | Train Avg:  -54.7 | Val Score:  -83.0 (Pellets: 11.7) | eps: 0.13 | Time: 1333s
+Ep 0850/1200 | Train Avg:  -42.3 | Val Score:  -62.0 (Pellets: 13.8) | eps: 0.12 | Time: 1419s
+Ep 0900/1200 | Train Avg:   60.0 | Val Score:  113.0 (Pellets: 31.3) | eps: 0.11 | Time: 1523s
+Ep 0950/1200 | Train Avg:   42.0 | Val Score:   49.0 (Pellets: 24.9) | eps: 0.09 | Time: 1584s
+Ep 1000/1200 | Train Avg:   14.0 | Val Score:   39.0 (Pellets: 23.9) | eps: 0.08 | Time: 1654s
+Ep 1050/1200 | Train Avg:   35.0 | Val Score:   62.0 (Pellets: 26.2) | eps: 0.07 | Time: 1728s
+Ep 1100/1200 | Train Avg:   61.0 | Val Score:   -2.0 (Pellets: 19.8) | eps: 0.06 | Time: 1852s
+Ep 1150/1200 | Train Avg:   60.3 | Val Score:  -57.0 (Pellets: 14.3) | eps: 0.06 | Time: 1970s
+Ep 1200/1200 | Train Avg:  -55.7 | Val Score: -108.0 (Pellets:  9.2) | eps: 0.05 | Time: 2042s
 
 ======================================================================
  TRAINING COMPLETE! Best Checkpoint Saved to C:\Users\wei.du\WorkAtTPVision\test\system_one\rl\weights\dqn_pacman.pt
- Best Validation Score: 500.0
+ Best Validation Score: 148.0
 ======================================================================
