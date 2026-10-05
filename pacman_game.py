@@ -74,7 +74,6 @@ class PacmanGame:
         speed: float = 6.0,
         initial_agent_idx: int = 1,
     ):
-        os.environ["SDL_VIDEO_CENTERED"] = "1"
         pygame.init()
         pygame.display.set_caption("PacMan-AI-Chronicles | 40 Years of AI Decision Paradigms")
 
@@ -87,18 +86,6 @@ class PacmanGame:
         self.screen_height = max(self.maze_height, 640)
         self.screen = pygame.display.set_mode((self.screen_width, self.screen_height))
         self.clock = pygame.time.Clock()
-
-        # Force window to foreground on Windows
-        try:
-            import ctypes
-            hwnd = pygame.display.get_wm_info().get("window")
-            if hwnd:
-                ctypes.windll.user32.ShowWindow(hwnd, 5)  # SW_SHOW
-                ctypes.windll.user32.BringWindowToTop(hwnd)
-                ctypes.windll.user32.SetForegroundWindow(hwnd)
-                ctypes.windll.user32.SwitchToThisWindow(hwnd, True)
-        except Exception:
-            pass
 
         # Fonts
         self.font_title = pygame.font.SysFont("Segoe UI", 18, bold=True)
@@ -740,13 +727,6 @@ class PacmanGame:
             self.screen.blit(pause_txt, (panel_x + pad, self.screen_height - 30))
 
     def run(self):
-        # Initial frame render to ensure instant window display
-        self.screen.fill(COLOR_BG)
-        self.draw_maze()
-        self.draw_telemetry_panel()
-        pygame.display.flip()
-        pygame.event.pump()
-
         running = True
         while running:
             dt = self.clock.tick(60) / 1000.0
@@ -820,18 +800,6 @@ def main():
         speed=args.speed,
         initial_agent_idx=args.agent,
     )
-
-    print(f"\n==========================================================================================", flush=True)
-    print(f" PACMAN-AI-CHRONICLES: Interactive Visual Arena", flush=True)
-    print(f"==========================================================================================", flush=True)
-    print(f" * Screen Size: {game.screen_width}x{game.screen_height} (Centered on screen)", flush=True)
-    print(f" * Active AI:   {game.current_controller['name']}", flush=True)
-    print(f" * Speed:       {game.move_speed:.0f} tiles/sec", flush=True)
-    print(f"------------------------------------------------------------------------------------------", flush=True)
-    print(f" [!] Window is active! If hidden behind your terminal, check the taskbar.", flush=True)
-    print(f"     Keys: [1]-[6] Switch AI | [Space] Pause | [S] Speed | [R] Reset | [ESC/Q] Quit", flush=True)
-    print(f"==========================================================================================\n", flush=True)
-
     game.run()
 
 
