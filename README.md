@@ -35,14 +35,14 @@ What happens when you pit modern **Generative AI (Large Language Models)** again
 
 ## 🥊 The Contenders
 
-| # | Agent Name | Paradigm | Technical Implementation | Inference Latency |
+| Hotkey | Agent Name | Paradigm | Technical Implementation | Inference Latency |
 | :-: | :--- | :--- | :--- | :-: |
-| **[1]** | **Random Baseline** | *Empirical Floor* | Uniform random distribution across legal corridors. | `0.00 ms` |
-| **[2]** | **Deep Q-Network (DQN)** | *Deep Reinforcement Learning* | Unentangled 6-channel velocity stack $\rightarrow$ 2D ConvNet with 10×10 receptive field pooling $\rightarrow$ Double-DQN. | `0.26 ms` |
-| **[3]** | **Policy-Optimized RL** | *Evolutionary / Policy Search* | Cross-Entropy Method optimizing topological graph features (Junctions, traps, BFS). | `0.03 ms` |
+| **[1]** | **Policy-Optimized RL** | *Evolutionary / Policy Search* | Cross-Entropy Method optimizing topological graph features (Junctions, traps, BFS). | `0.03 ms` |
+| **[2]** | **Deep Q-Network (DQN)** | *Deep Reinforcement Learning* | Unentangled 6-channel binary state $\rightarrow$ 2D ConvNet with 10×10 receptive field pooling $\rightarrow$ Double-DQN. | `0.26 ms` |
+| **[3]** | **System 1 (LLM)** | *Foundation Model Zero-Shot* | Structured JSON / spatial reasoning via Ollama `POST /v1/systemone`. | `93.4 ms` |
 | **[4]** | **Greedy Heuristic** | *Symbolic / Expert Rules* | Hand-crafted priority rules balancing BFS food seeking and ghost evasion. | `0.02 ms` |
 | **[5]** | **Textbook Q-Learning** | *Classical TD-Learning* | Bellman equation updates on classic linear feature approximations. | `0.01 ms` |
-| **[6]** | **System 1 (LLM)** | *Foundation Model Zero-Shot* | Structured JSON / spatial reasoning via Ollama `POST /v1/systemone`. | `93.4 ms` |
+| **[6]** | **Random Baseline** | *Empirical Floor* | Uniform random distribution across legal corridors. | `0.00 ms` |
 
 ---
 
@@ -166,15 +166,20 @@ PacMan-AI-Chronicles/
 │
 ├── rl/                          # Reinforcement Learning Subsystem
 │   ├── __init__.py              # Unified exports for RL models & algorithms
-│   ├── dqn_model.py             # PacmanDQN CNN & 4-channel spatial state encoder
-│   ├── train_dqn.py             # Double-DQN training pipeline with ReplayBuffer
-│   ├── train_q_learning.py      # Approximate TD Q-learning
+│   ├── dqn_model.py             # PacmanDQN CNN & 6-channel unentangled binary state encoder
+│   ├── train_dqn.py             # Double-DQN training pipeline with ReplayBuffer & metrics
+│   ├── plot_metrics.py          # Diagnostic figure generator (SVG vector & PNG raster)
+│   ├── train_q_learning.py      # Approximate TD Q-learning trainer
 │   ├── optimize_policy.py       # Direct policy search (Cross-Entropy Method / ES)
-│   └── weights/                 # Checkpoints, learned weights & training logs
-│       ├── dqn_pacman.pt        # Trained PyTorch CNN checkpoint (Peak: 570 pts)
-│       ├── learned_q_weights.json # Q-learning weights (Score: 813.8)
-│       ├── learned_enhanced_weights.json # Policy-optimized weights (Score: 926.2)
-│       └── dqn_training.log     # 1,200 episode training telemetry log
+│   └── weights/                 # Checkpoints, learned weights & diagnostics
+│       ├── dqn_pacman.pt        # Trained PyTorch CNN checkpoint (Peak val: 440.0)
+│       ├── dqn_training.log     # Detailed milestone training telemetry log
+│       ├── dqn_training_metrics.json # Per-episode training metrics (JSON)
+│       ├── dqn_training_metrics.csv  # Per-episode training metrics (CSV)
+│       ├── dqn_training_figures.svg  # Scalable vector diagnostic dashboard
+│       ├── dqn_training_figures.png  # 4-panel raster diagnostic dashboard
+│       ├── learned_q_weights.json    # Classical TD weights
+│       └── learned_enhanced_weights.json # Policy-optimized weights
 │
 ├── agents/                      # Decoupled Agent Implementations
 │   ├── __init__.py              # Unified agent registry
