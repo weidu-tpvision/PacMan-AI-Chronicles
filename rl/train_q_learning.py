@@ -312,17 +312,9 @@ def train_q_learning(episodes: int = 1500, save_path: str = DEFAULT_SAVE_PATH) -
     print(f"\nTraining completed in {t_elapsed:.2f} seconds.")
 
     os.makedirs(os.path.dirname(os.path.abspath(save_path)), exist_ok=True)
-    with open(save_path, "w") as f:
+    with open(save_path, "w", encoding="utf-8") as f:
         json.dump(agent.weights, f, indent=2)
     print(f"[SUCCESS] Saved learned weights to {save_path}")
-
-    # Also mirror to root if running in system_one
-    root_mirror = "learned_q_weights.json"
-    try:
-        with open(root_mirror, "w") as f:
-            json.dump(agent.weights, f, indent=2)
-    except Exception:
-        pass
 
     return agent
 

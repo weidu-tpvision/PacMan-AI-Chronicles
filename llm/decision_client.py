@@ -4,6 +4,7 @@ Supports POST /v1/systemone with enriched spatial context,
 rolling latency telemetry, and heuristic fallback simulation.
 """
 
+import collections
 import json
 import math
 import os
@@ -12,40 +13,11 @@ import urllib.error
 import urllib.request
 from typing import Dict, List, Optional, Tuple, Any
 
-try:
-    from core.maze_data import GRID_WIDTH
-except ImportError:
-    from maze_data import GRID_WIDTH
-
+from agents.base import DecisionResult, softmax
+from core.maze_data import DIRECTIONS, GRID_WIDTH, OPPOSITE_DIRECTIONS
 
 DEFAULT_OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "nimble")
-
-
-class DecisionResult:
-    def __init__(
-        self,
-        choice: str,
-        probabilities: Dict[str, float],
-        confidence: float,
-        latency_ms: float,
-        is_live: bool,
-        raw_response: Optional[dict] = None,
-        error_msg: Optional[str] = None,
-    ):
-        self.choice = choice
-        self.probabilities = probabilities
-        self.confidence = confidence
-        self.latency_ms = latency_ms
-        self.is_live = is_live
-        self.raw_response = raw_response or {}
-        self.error_msg = error_msg
-
-    def __repr__(self):
-        return (
-            f"DecisionResult(choice={self.choice}, "
-            f"confidence={self.confidence:.3f}, latency={self.latency_ms:.1f}ms, live={self.is_live})"
-        )
 
 
 class SystemOneAgent:
@@ -66,8 +38,12 @@ class SystemOneAgent:
         self._cached_online_status: Optional[bool] = None
         self._last_status_check = 0.0
 
-        # Telemetry history
-        self.latencies: List[float] = []
+        # Telemetry history (fixed rolling window)
+        self.latencies: collections.deque = collections.deque(maxlen=100)
+
+    def reset(self) -> None:
+        """Reset agent session / latency telemetry."""
+        self.last_result = None
 
     @property
     def avg_latency(self) -> float:
@@ -151,29 +127,18 @@ class SystemOneAgent:
                 res = self._call_ollama_system_one(
                     pacman_pos, ghost_positions, legal_moves, pellets
                 )
-                self.latencies.append(res.latency_ms)
-                if len(self.latencies) > 100:
-                    self.latencies.pop(0)
-                self.last_result = res
-                return res
             except Exception as e:
                 res = self._heuristic_decision(
                     pacman_pos, ghost_positions, pellets, legal_moves, last_move, error_msg=str(e)
                 )
-                self.latencies.append(res.latency_ms)
-                if len(self.latencies) > 100:
-                    self.latencies.pop(0)
-                self.last_result = res
-                return res
         else:
             res = self._heuristic_decision(
                 pacman_pos, ghost_positions, pellets, legal_moves, last_move
             )
-            self.latencies.append(res.latency_ms)
-            if len(self.latencies) > 100:
-                self.latencies.pop(0)
-            self.last_result = res
-            return res
+
+        self.latencies.append(res.latency_ms)
+        self.last_result = res
+        return res
 
     def _call_ollama_system_one(
         self,
@@ -258,16 +223,13 @@ class SystemOneAgent:
         scores: Dict[str, float] = {}
 
         px, py = pacman_pos
-        move_deltas = {
-            "up": (0, -1),
-            "down": (0, 1),
-            "left": (-1, 0),
-            "right": (1, 0),
-        }
-        opposite_map = {"up": "down", "down": "up", "left": "right", "right": "left"}
+        nearby_pellets = (
+            sorted(pellets, key=lambda p: abs(px - p[0]) + abs(py - p[1]))[:30]
+            if pellets else []
+        )
 
         for move in legal_moves:
-            dx, dy = move_deltas[move]
+            dx, dy = DIRECTIONS[move]
             nx, ny = (px + dx) % GRID_WIDTH, py + dy
 
             # Distance to nearest ghost
@@ -289,24 +251,19 @@ class SystemOneAgent:
             if (nx, ny) in pellets:
                 score += 18.0
 
-            if pellets:
-                sample_pellets = list(pellets)[:30]
+            if nearby_pellets:
                 min_pellet_dist = min(
-                    abs(nx - px2) + abs(ny - py2) for px2, py2 in sample_pellets
+                    abs(nx - px2) + abs(ny - py2) for px2, py2 in nearby_pellets
                 )
                 score -= min_pellet_dist * 1.8
 
             # Discourage immediate U-turns unless escaping
-            if last_move and move == opposite_map.get(last_move) and min_ghost_dist > 3:
+            if last_move and move == OPPOSITE_DIRECTIONS.get(last_move) and min_ghost_dist > 3:
                 score -= 10.0
 
             scores[move] = score
 
-        max_s = max(scores.values())
-        temp = 10.0
-        exp_scores = {m: math.exp((s - max_s) / temp) for m, s in scores.items()}
-        total_exp = sum(exp_scores.values())
-        probabilities = {m: round(exp_scores[m] / total_exp, 3) for m in legal_moves}
+        probabilities = softmax(scores, temp=10.0)
 
         best_move = max(probabilities.keys(), key=lambda m: probabilities[m])
         sorted_probs = sorted(probabilities.values(), reverse=True)

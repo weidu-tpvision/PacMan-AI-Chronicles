@@ -1,10 +1,13 @@
 """
 Training pipeline for Deep Q-Network (DQN) and Double-DQN on Pac-Man.
 Implements:
+- Unentangled 6-channel state encoding with velocity/momentum tracking
+- Global 10x10 receptive field via MaxPool2d(2)
 - Experience Replay Buffer (breaks temporal correlation)
 - Target Network (Double DQN to prevent Q-value overestimation)
 - Smooth L1 (Huber) Loss and Adam optimization
 - Decaying epsilon-greedy exploration
+- Momentum-preserving reward shaping and anti-stall cutoff
 - Model checkpointing to rl/weights/dqn_pacman.pt
 """
 
@@ -34,13 +37,13 @@ except ImportError:
 from rl.plot_metrics import plot_metrics
 
 from core.environment import Environment
+from core.maze_data import OPPOSITE_DIRECTIONS
 from rl.dqn_model import (
     ACTIONS,
     ACTION_TO_IDX,
     IDX_TO_ACTION,
-    FRAME_STACK_SIZE,
+    NUM_CHANNELS,
     PacmanDQN,
-    encode_frame,
     encode_state,
 )
 
@@ -72,7 +75,7 @@ class ReplayBuffer:
 
 
 def evaluate_dqn(policy_net: nn.Module, episodes: int = 15, max_steps: int = 400) -> Tuple[float, float]:
-    """Evaluate current policy deterministically without epsilon exploration using stacked frames."""
+    """Evaluate current policy deterministically without epsilon exploration using 6-channel state."""
     policy_net.eval()
     scores = []
     pellets_cleared = []
@@ -82,22 +85,32 @@ def evaluate_dqn(policy_net: nn.Module, episodes: int = 15, max_steps: int = 400
             env = Environment(seed=10000 + seed)
             score = 0
             pellets_count = 0
-            f0 = encode_frame(tuple(env.pacman_pos), [tuple(g) for g in env.ghost_positions], env.pellets)
-            history = collections.deque([f0] * FRAME_STACK_SIZE, maxlen=FRAME_STACK_SIZE)
+            prev_p = None
+            prev_g = None
 
             for _ in range(max_steps):
                 legal = env.get_legal_moves(env.pacman_pos[0], env.pacman_pos[1])
                 if not legal:
                     break
 
-                s_arr = np.stack(history, axis=0)
+                curr_p = tuple(env.pacman_pos)
+                curr_g = [tuple(g) for g in env.ghost_positions]
+                s_arr = encode_state(curr_p, curr_g, env.pellets, prev_p, prev_g)
                 s_t = torch.from_numpy(s_arr).unsqueeze(0)
                 q_vals = policy_net(s_t).squeeze(0)
 
                 legal_q = {m: q_vals[ACTION_TO_IDX[m]].item() for m in legal}
+                if env.last_move and len(legal) > 1:
+                    opp = OPPOSITE_DIRECTIONS.get(env.last_move)
+                    if opp in legal_q:
+                        legal_q[opp] -= 1.0
+
                 best_q = max(legal_q.values())
                 best_moves = [m for m in legal if legal_q[m] == best_q]
                 move = random.choice(best_moves)
+
+                prev_p = curr_p
+                prev_g = curr_g
 
                 collided, ate_pellet, won = env.step(move)
                 if ate_pellet:
@@ -109,9 +122,6 @@ def evaluate_dqn(policy_net: nn.Module, episodes: int = 15, max_steps: int = 400
                 if won:
                     score += 500
                     break
-
-                fn = encode_frame(tuple(env.pacman_pos), [tuple(g) for g in env.ghost_positions], env.pellets)
-                history.append(fn)
 
             scores.append(score)
             pellets_cleared.append(pellets_count)
@@ -151,8 +161,8 @@ def train_dqn(
 
     device = torch.device("cpu")
 
-    policy_net = PacmanDQN().to(device)
-    target_net = PacmanDQN().to(device)
+    policy_net = PacmanDQN(in_channels=NUM_CHANNELS).to(device)
+    target_net = PacmanDQN(in_channels=NUM_CHANNELS).to(device)
     target_net.load_state_dict(policy_net.state_dict())
     target_net.eval()
 
@@ -161,7 +171,7 @@ def train_dqn(
     replay_buffer = ReplayBuffer(capacity=40000)
 
     log_print("======================================================================")
-    log_print(" DEEP Q-NETWORK (DQN) TRAINING: Convolutional Neural Agent")
+    log_print(" DEEP Q-NETWORK (DQN) TRAINING: 6-Channel Velocity-Aware CNN")
     log_print("======================================================================")
     log_print(f"Device: {device} | Batch Size: {batch_size} | Learning Rate: {lr}")
     log_print(f"Episodes: {episodes} | Target Sync: every {target_update_steps} steps\n")
@@ -169,36 +179,46 @@ def train_dqn(
 
     # Warm-up phase
     warmup_env = Environment(seed=42)
-    f0 = encode_frame(tuple(warmup_env.pacman_pos), [tuple(g) for g in warmup_env.ghost_positions], warmup_env.pellets)
-    w_history = collections.deque([f0] * FRAME_STACK_SIZE, maxlen=FRAME_STACK_SIZE)
+    w_prev_p = None
+    w_prev_g = None
 
     for _ in range(warmup_steps):
         legal = warmup_env.get_legal_moves(warmup_env.pacman_pos[0], warmup_env.pacman_pos[1])
         if not legal:
             warmup_env = Environment(seed=random.randint(0, 99999))
-            f0 = encode_frame(tuple(warmup_env.pacman_pos), [tuple(g) for g in warmup_env.ghost_positions], warmup_env.pellets)
-            w_history = collections.deque([f0] * FRAME_STACK_SIZE, maxlen=FRAME_STACK_SIZE)
+            w_prev_p = None
+            w_prev_g = None
             legal = warmup_env.get_legal_moves(warmup_env.pacman_pos[0], warmup_env.pacman_pos[1])
 
-        s = np.stack(w_history, axis=0)
+        curr_p = tuple(warmup_env.pacman_pos)
+        curr_g = [tuple(g) for g in warmup_env.ghost_positions]
+        s = encode_state(curr_p, curr_g, warmup_env.pellets, w_prev_p, w_prev_g)
+
         m = random.choice(legal)
         act_idx = ACTION_TO_IDX[m]
 
         col, ate, won = warmup_env.step(m)
-        r = 12.0 if ate else -0.5
+        r = -0.5
+        if ate:
+            r += 15.0
         if col:
-            r = -150.0
+            r -= 150.0
+        elif won:
+            r += 300.0
 
-        fn = encode_frame(tuple(warmup_env.pacman_pos), [tuple(g) for g in warmup_env.ghost_positions], warmup_env.pellets)
-        w_history.append(fn)
-        ns = np.stack(w_history, axis=0)
+        next_p = tuple(warmup_env.pacman_pos)
+        next_g = [tuple(g) for g in warmup_env.ghost_positions]
+        ns = encode_state(next_p, next_g, warmup_env.pellets, curr_p, curr_g)
         done = col or won
         replay_buffer.push(s, act_idx, r, ns, float(done))
 
+        w_prev_p = curr_p
+        w_prev_g = curr_g
+
         if done:
             warmup_env = Environment(seed=random.randint(0, 99999))
-            f0 = encode_frame(tuple(warmup_env.pacman_pos), [tuple(g) for g in warmup_env.ghost_positions], warmup_env.pellets)
-            w_history = collections.deque([f0] * FRAME_STACK_SIZE, maxlen=FRAME_STACK_SIZE)
+            w_prev_p = None
+            w_prev_g = None
 
     log_print("Warm-up complete! Beginning DQN neural optimization...\n")
 
@@ -214,9 +234,9 @@ def train_dqn(
         ep_reward = 0.0
         pellets_eaten = 0
         collided = False
-        f0 = encode_frame(tuple(env.pacman_pos), [tuple(g) for g in env.ghost_positions], env.pellets)
-        history = collections.deque([f0] * FRAME_STACK_SIZE, maxlen=FRAME_STACK_SIZE)
-        s = np.stack(history, axis=0)
+        steps_without_pellet = 0
+        prev_p = None
+        prev_g = None
         ep_losses = []
 
         for step in range(350):
@@ -224,6 +244,10 @@ def train_dqn(
             legal = env.get_legal_moves(env.pacman_pos[0], env.pacman_pos[1])
             if not legal:
                 break
+
+            curr_p = tuple(env.pacman_pos)
+            curr_g = [tuple(g) for g in env.ghost_positions]
+            s = encode_state(curr_p, curr_g, env.pellets, prev_p, prev_g)
 
             # Epsilon-greedy action selection
             if random.random() < epsilon:
@@ -233,6 +257,11 @@ def train_dqn(
                     s_t = torch.from_numpy(s).unsqueeze(0).to(device)
                     q_vals = policy_net(s_t).squeeze(0)
                     legal_q = {mv: q_vals[ACTION_TO_IDX[mv]].item() for mv in legal}
+                    if env.last_move and len(legal) > 1:
+                        opp = OPPOSITE_DIRECTIONS.get(env.last_move)
+                        if opp in legal_q:
+                            legal_q[opp] -= 1.0
+
                     best_q = max(legal_q.values())
                     best_moves = [mv for mv in legal if legal_q[mv] == best_q]
                     m = random.choice(best_moves)
@@ -240,34 +269,52 @@ def train_dqn(
             act_idx = ACTION_TO_IDX[m]
             col, ate, won = env.step(m)
 
-            r = -0.5  # Time cost
+            # Reward shaping
+            r = -0.5  # Base time step cost to prevent passive lingering
             if ate:
-                r += 12.0
+                r += 15.0
                 pellets_eaten += 1
+                steps_without_pellet = 0
+            else:
+                steps_without_pellet += 1
+
             if col:
                 r -= 150.0
                 collided = True
             elif won:
                 r += 300.0
 
+            # Reversal penalty to teach forward momentum through corridors
+            if env.last_move and m == OPPOSITE_DIRECTIONS.get(env.last_move) and len(legal) > 1:
+                r -= 1.5
+
+            # Anti-stall / anti-orbit penalty:
+            # If Pac-Man makes 45 consecutive steps without eating a single pellet,
+            # it is stuck in an empty cycle. Terminate with stall penalty.
+            stalled = False
+            if steps_without_pellet >= 45 and not col and not won:
+                r -= 50.0
+                stalled = True
+
             ep_reward += r
-            fn = encode_frame(tuple(env.pacman_pos), [tuple(g) for g in env.ghost_positions], env.pellets)
-            history.append(fn)
-            ns = np.stack(history, axis=0)
-            done = col or won
+            next_p = tuple(env.pacman_pos)
+            next_g = [tuple(g) for g in env.ghost_positions]
+            ns = encode_state(next_p, next_g, env.pellets, curr_p, curr_g)
+            done = col or won or stalled
+
             replay_buffer.push(s, act_idx, r, ns, float(done))
-            s = ns
+
+            prev_p = curr_p
+            prev_g = curr_g
 
             # Sample batch & optimize
             if len(replay_buffer) >= batch_size:
                 b_s, b_a, b_r, b_ns, b_d = replay_buffer.sample(batch_size)
-                b_s, b_a, b_r, b_ns, b_d = (
-                    b_s.to(device),
-                    b_a.to(device),
-                    b_r.to(device),
-                    b_ns.to(device),
-                    b_d.to(device),
-                )
+                b_s = b_s.to(device)
+                b_a = b_a.to(device)
+                b_r = b_r.to(device)
+                b_ns = b_ns.to(device)
+                b_d = b_d.to(device)
 
                 # Current Q(s, a)
                 curr_q = policy_net(b_s).gather(1, b_a)
@@ -284,19 +331,18 @@ def train_dqn(
 
                 optimizer.zero_grad()
                 loss.backward()
-                nn.utils.clip_grad_norm_(policy_net.parameters(), max_norm=5.0)
+                torch.nn.utils.clip_grad_norm_(policy_net.parameters(), max_norm=5.0)
                 optimizer.step()
 
-            # Target network sync
+            # Target network synchronization
             if total_steps % target_update_steps == 0:
                 target_net.load_state_dict(policy_net.state_dict())
 
-            if col or won:
+            if done:
                 break
 
-        # Epsilon decay
-        if epsilon > epsilon_min:
-            epsilon *= epsilon_decay
+        # Decay exploration
+        epsilon = max(epsilon_min, epsilon * epsilon_decay)
 
         score = (pellets_eaten * 10) - (200 if collided else 0)
         recent_scores.append(score)
@@ -338,14 +384,6 @@ def train_dqn(
     log_print(f" Best Validation Score: {best_val_score:.1f}")
     log_print("======================================================================")
     log_file.close()
-
-    # Sync checkpoint to root directory as well
-    import shutil
-    root_model_path = os.path.join(os.path.dirname(__file__), "..", os.path.basename(save_path))
-    try:
-        shutil.copyfile(save_path, root_model_path)
-    except Exception:
-        pass
 
     # Export metrics files
     with open(json_path, "w", encoding="utf-8") as f:

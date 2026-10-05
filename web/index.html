@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>PacMan-AI-Chronicles | Interactive AI Arena</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: #0f172a;
+      color: #f8fafc;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      padding: 20px;
+    }
+    .arena-container {
+      display: flex;
+      background-color: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+    }
+    .maze-panel {
+      background-color: #0f172a;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+    canvas {
+      display: block;
+      border-radius: 6px;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+    }
+    .telemetry-panel {
+      width: 440px;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      border-left: 1px solid #334155;
+    }
+    .title-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    h1 { font-size: 1.25rem; font-weight: 700; color: #f8fafc; }
+    .badge {
+      font-size: 0.75rem;
+      padding: 4px 10px;
+      border-radius: 9999px;
+      font-weight: 600;
+      background: rgba(168, 85, 247, 0.2);
+      color: #c084fc;
+      border: 1px solid rgba(168, 85, 247, 0.4);
+    }
+    .card {
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 14px;
+    }
+    .card-title {
+      font-size: 0.7rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #94a3b8;
+      margin-bottom: 8px;
+    }
+    .agent-header {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: #ec4899;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .agent-sub { font-size: 0.75rem; color: #64748b; margin-top: 2px; }
+    .decision-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-top: 8px;
+    }
+    .choice-tag {
+      font-size: 1.4rem;
+      font-weight: 800;
+      text-transform: uppercase;
+      color: #38bdf8;
+    }
+    .metrics-meta { font-size: 0.75rem; color: #94a3b8; font-family: monospace; }
+    .prob-bar-container {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+      font-size: 0.75rem;
+    }
+    .prob-label { width: 45px; font-weight: 600; color: #cbd5e1; }
+    .prob-track {
+      flex: 1;
+      height: 10px;
+      background: #334155;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .prob-fill {
+      height: 100%;
+      background: #6366f1;
+      width: 0%;
+      transition: width 0.08s ease-out;
+    }
+    .prob-val { width: 40px; text-align: right; color: #94a3b8; font-family: monospace; }
+    .agent-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+    }
+    .agent-btn {
+      background: #1e293b;
+      border: 1px solid #334155;
+      color: #cbd5e1;
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      cursor: pointer;
+      text-align: left;
+      transition: all 0.15s ease;
+    }
+    .agent-btn:hover { background: #334155; }
+    .agent-btn.active {
+      border-color: #ec4899;
+      background: rgba(236, 72, 153, 0.15);
+      color: #f472b6;
+      font-weight: 600;
+    }
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      text-align: center;
+    }
+    .stat-box { background: #1e293b; padding: 8px; border-radius: 6px; }
+    .stat-num { font-size: 1.1rem; font-weight: 700; color: #f8fafc; }
+    .stat-lbl { font-size: 0.65rem; color: #64748b; text-transform: uppercase; }
+    .controls-hint {
+      font-size: 0.7rem;
+      color: #64748b;
+      line-height: 1.4;
+      border-top: 1px solid #334155;
+      padding-top: 10px;
+    }
+    kbd {
+      background: #334155;
+      color: #f8fafc;
+      padding: 2px 5px;
+      border-radius: 3px;
+      font-size: 0.65rem;
+      border: 1px solid #475569;
+    }
+  </style>
+</head>
+<body>
+
+<div class="arena-container">
+  <!-- Left: Pac-Man Maze Canvas -->
+  <div class="maze-panel">
+    <canvas id="mazeCanvas" width="494" height="546"></canvas>
+  </div>
+
+  <!-- Right: Decision & Telemetry Panel -->
+  <div class="telemetry-panel">
+    <div class="title-row">
+      <h1>PAC-MAN AI ARENA</h1>
+      <span class="badge" id="statusBadge">RUNNING</span>
+    </div>
+
+    <!-- Active Agent Header -->
+    <div class="card" id="agentCard">
+      <div class="agent-header">
+        <span id="agentName">Deep Q-Network (DQN)</span>
+        <span class="badge" id="agentBadge" style="background: rgba(236,72,153,0.2); color:#f472b6; border-color:rgba(236,72,153,0.4);">
+          6-Channel PyTorch CNN
+        </span>
+      </div>
+      <div class="agent-sub" id="agentSub">Learned from raw spatial tensors with temporal momentum</div>
+
+      <div class="decision-row">
+        <div>
+          <span style="font-size: 0.65rem; color: #64748b; text-transform: uppercase;">Decision</span>
+          <div class="choice-tag" id="choiceTag">...</div>
+        </div>
+        <div class="metrics-meta" id="decisionMeta">
+          Latency: 0.26 ms | Conf: 0.85
+        </div>
+      </div>
+    </div>
+
+    <!-- Probabilities / Q-Values Bar Graph -->
+    <div class="card">
+      <div class="card-title">Decision Distribution</div>
+      <div class="prob-bar-container">
+        <span class="prob-label">UP</span>
+        <div class="prob-track"><div class="prob-fill" id="bar-up"></div></div>
+        <span class="prob-val" id="val-up">0.0%</span>
+      </div>
+      <div class="prob-bar-container">
+        <span class="prob-label">DOWN</span>
+        <div class="prob-track"><div class="prob-fill" id="bar-down"></div></div>
+        <span class="prob-val" id="val-down">0.0%</span>
+      </div>
+      <div class="prob-bar-container">
+        <span class="prob-label">LEFT</span>
+        <div class="prob-track"><div class="prob-fill" id="bar-left"></div></div>
+        <span class="prob-val" id="val-left">0.0%</span>
+      </div>
+      <div class="prob-bar-container">
+        <span class="prob-label">RIGHT</span>
+        <div class="prob-track"><div class="prob-fill" id="bar-right"></div></div>
+        <span class="prob-val" id="val-right">0.0%</span>
+      </div>
+    </div>
+
+    <!-- Switch AI Controllers -->
+    <div class="card">
+      <div class="card-title">Hot-Swap AI Paradigm</div>
+      <div class="agent-grid">
+        <button class="agent-btn" onclick="switchAgent(0)">[1] Policy-Optimized RL</button>
+        <button class="agent-btn active" onclick="switchAgent(1)">[2] Deep Q-Network</button>
+        <button class="agent-btn" onclick="switchAgent(2)">[3] System 1 (LLM)</button>
+        <button class="agent-btn" onclick="switchAgent(3)">[4] Greedy Heuristic</button>
+        <button class="agent-btn" onclick="switchAgent(4)">[5] Q-Learning TD</button>
+        <button class="agent-btn" onclick="switchAgent(5)">[6] Random Agent</button>
+      </div>
+    </div>
+
+    <!-- Telemetry Stats -->
+    <div class="stats-grid">
+      <div class="stat-box">
+        <div class="stat-num" id="statScore">0</div>
+        <div class="stat-lbl">Score</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-num" id="statPellets">150</div>
+        <div class="stat-lbl">Pellets Left</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-num" id="statMoves">0</div>
+        <div class="stat-lbl">Moves</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-num" id="statLives">❤️❤️❤️</div>
+        <div class="stat-lbl">Lives</div>
+      </div>
+    </div>
+
+    <!-- Controls hint -->
+    <div class="controls-hint">
+      Hotkeys: <kbd>1-6</kbd> Switch AI &nbsp;|&nbsp; <kbd>Space</kbd> Pause/Resume &nbsp;|&nbsp; <kbd>S</kbd> Speed &nbsp;|&nbsp; <kbd>R</kbd> Reset Board
+    </div>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById("mazeCanvas");
+const ctx = canvas.getContext("2d");
+const TILE = 26;
+
+let state = null;
+let isPaused = false;
+let mouthAngle = 0.2;
+let mouthDir = 1;
+
+async function fetchState() {
+  if (isPaused) return;
+  try {
+    const res = await fetch("/api/step", { method: "POST" });
+    const data = await res.json();
+    state = data;
+    render(data);
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+function render(data) {
+  if (!data) return;
+
+  // Clear background
+  ctx.fillStyle = "#0f172a";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // 1. Draw Walls
+  ctx.fillStyle = "#475569";
+  for (const [x, y] of data.walls) {
+    ctx.beginPath();
+    ctx.roundRect(x * TILE + 1, y * TILE + 1, TILE - 2, TILE - 2, 4);
+    ctx.fill();
+  }
+
+  // 2. Draw Pellets
+  ctx.fillStyle = "#fbbf24";
+  for (const [x, y] of data.pellets) {
+    ctx.beginPath();
+    ctx.arc(x * TILE + TILE / 2, y * TILE + TILE / 2, 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // 3. Draw Pac-Man
+  mouthAngle += 0.04 * mouthDir;
+  if (mouthAngle > 0.45) mouthDir = -1;
+  if (mouthAngle < 0.05) mouthDir = 1;
+
+  const px = data.pacman[0] * TILE + TILE / 2;
+  const py = data.pacman[1] * TILE + TILE / 2;
+  const radius = TILE / 2 - 2;
+
+  let rot = 0;
+  if (data.last_move === "right") rot = 0;
+  else if (data.last_move === "down") rot = Math.PI / 2;
+  else if (data.last_move === "left") rot = Math.PI;
+  else if (data.last_move === "up") rot = -Math.PI / 2;
+
+  ctx.fillStyle = "#facc15";
+  ctx.beginPath();
+  ctx.arc(px, py, radius, rot + mouthAngle, rot + Math.PI * 2 - mouthAngle);
+  ctx.lineTo(px, py);
+  ctx.fill();
+
+  // 4. Draw Ghosts
+  const ghostColors = ["#d9565c", "#dc7fb0", "#e08d55"];
+  data.ghosts.forEach((g, idx) => {
+    const gx = g[0] * TILE + 2;
+    const gy = g[1] * TILE + 2;
+    const gw = TILE - 4;
+    const gh = TILE - 4;
+
+    ctx.fillStyle = ghostColors[idx % 3];
+    ctx.beginPath();
+    ctx.arc(gx + gw / 2, gy + gw / 2, gw / 2, Math.PI, 0, false);
+    ctx.lineTo(gx + gw, gy + gh);
+    ctx.lineTo(gx + (gw * 0.75), gy + gh - 4);
+    ctx.lineTo(gx + (gw * 0.5), gy + gh);
+    ctx.lineTo(gx + (gw * 0.25), gy + gh - 4);
+    ctx.lineTo(gx, gy + gh);
+    ctx.closePath();
+    ctx.fill();
+
+    // Eyes
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath();
+    ctx.arc(gx + gw * 0.3, gy + gh * 0.35, 3.5, 0, Math.PI * 2);
+    ctx.arc(gx + gw * 0.7, gy + gh * 0.35, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#1e293b";
+    ctx.beginPath();
+    ctx.arc(gx + gw * 0.3, gy + gh * 0.35, 1.8, 0, Math.PI * 2);
+    ctx.arc(gx + gw * 0.7, gy + gh * 0.35, 1.8, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  // 5. Update Telemetry HUD
+  document.getElementById("statScore").innerText = data.score;
+  document.getElementById("statPellets").innerText = data.pellets_left;
+  document.getElementById("statMoves").innerText = data.moves;
+  document.getElementById("choiceTag").innerText = data.decision.choice;
+  document.getElementById("decisionMeta").innerText = `Latency: ${data.decision.latency_ms.toFixed(2)} ms | Conf: ${data.decision.confidence.toFixed(2)}`;
+
+  // Update Probabilities Bar Chart
+  const probs = data.decision.probabilities || {};
+  ["up", "down", "left", "right"].forEach(dir => {
+    const val = (probs[dir] || 0) * 100;
+    const bar = document.getElementById("bar-" + dir);
+    const text = document.getElementById("val-" + dir);
+    if (bar) bar.style.width = val.toFixed(1) + "%";
+    if (text) text.innerText = val.toFixed(1) + "%";
+  });
+}
+
+async function switchAgent(idx) {
+  try {
+    const res = await fetch("/api/switch_agent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ index: idx }),
+    });
+    const info = await res.json();
+    document.querySelectorAll(".agent-btn").forEach((b, i) => {
+      b.classList.toggle("active", i === idx);
+    });
+    document.getElementById("agentName").innerText = info.name;
+    document.getElementById("agentBadge").innerText = info.badge;
+    document.getElementById("agentSub").innerText = info.sub;
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+async function resetBoard() {
+  await fetch("/api/reset", { method: "POST" });
+}
+
+window.addEventListener("keydown", (e) => {
+  if (e.key >= "1" && e.key <= "6") {
+    switchAgent(parseInt(e.key) - 1);
+  } else if (e.code === "Space") {
+    isPaused = !isPaused;
+    document.getElementById("statusBadge").innerText = isPaused ? "PAUSED" : "RUNNING";
+    document.getElementById("statusBadge").style.background = isPaused ? "rgba(245,158,11,0.2)" : "rgba(168,85,247,0.2)";
+    document.getElementById("statusBadge").style.color = isPaused ? "#fbbf24" : "#c084fc";
+  } else if (e.key === "r" || e.key === "R") {
+    resetBoard();
+  }
+});
+
+// Run game loop at ~15 updates per second
+setInterval(fetchState, 70);
+</script>
+</body>
+</html>

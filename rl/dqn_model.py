@@ -1,9 +1,15 @@
 """
 Deep Q-Network (DQN) PyTorch Architecture for Pac-Man.
-Encodes the 19x21 maze into a 4-channel spatial tensor and outputs Q-values for actions.
+Encodes the 21x19 maze into an unentangled 6-channel spatial tensor with temporal velocity tracking:
+  Channel 0: Static Walls (1.0 = Wall, 0.0 = Corridor)
+  Channel 1: Pellets remaining (1.0 = Pellet, 0.0 = Empty)
+  Channel 2: Pac-Man current position at t (1.0 = Pac-Man)
+  Channel 3: Ghosts current positions at t (1.0 = Ghost)
+  Channel 4: Pac-Man previous position at t-1 (1.0 = Pac-Man)
+  Channel 5: Ghosts previous positions at t-1 (1.0 = Ghost)
 """
 
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 import numpy as np
 
 try:
@@ -20,19 +26,62 @@ ACTIONS = ["up", "down", "left", "right"]
 ACTION_TO_IDX = {a: i for i, a in enumerate(ACTIONS)}
 IDX_TO_ACTION = {i: a for i, a in enumerate(ACTIONS)}
 
-# Visual cell values
-VAL_EMPTY = 0.0
-VAL_WALL = -0.5
-VAL_PELLET = 0.5
-VAL_PACMAN = 1.0
-VAL_GHOST = -1.0
-FRAME_STACK_SIZE = 3
+NUM_CHANNELS = 6
+FRAME_STACK_SIZE = NUM_CHANNELS  # Backwards-compatibility alias
 
-# Precompute static walls mask
-BASE_FRAME = np.full((GRID_HEIGHT, GRID_WIDTH), VAL_EMPTY, dtype=np.float32)
+# Precompute static walls mask (Channel 0)
+WALL_MAP = np.zeros((GRID_HEIGHT, GRID_WIDTH), dtype=np.float32)
 for x, y in WALL_CELLS:
     if 0 <= y < GRID_HEIGHT and 0 <= x < GRID_WIDTH:
-        BASE_FRAME[y, x] = VAL_WALL
+        WALL_MAP[y, x] = 1.0
+
+
+def encode_state(
+    pacman_pos: Tuple[int, int],
+    ghost_positions: List[Tuple[int, int]],
+    pellets: set,
+    prev_pacman_pos: Optional[Tuple[int, int]] = None,
+    prev_ghost_positions: Optional[List[Tuple[int, int]]] = None,
+    **kwargs,
+) -> np.ndarray:
+    """
+    Encode game state into an unentangled (6, 21, 19) float32 binary tensor:
+      Channel 0: Static Walls (1.0 = Wall, 0.0 = Corridor)
+      Channel 1: Pellets remaining (1.0 = Pellet, 0.0 = Empty)
+      Channel 2: Pac-Man current position at t (1.0 = Pac-Man)
+      Channel 3: Ghosts current positions at t (1.0 = Ghost)
+      Channel 4: Pac-Man previous position at t-1 (1.0 = Pac-Man)
+      Channel 5: Ghosts previous positions at t-1 (1.0 = Ghost)
+
+    All channels contain strictly discrete binary values {0.0, 1.0} ensuring
+    optimal gradient flow under ReLU without sign or polarity interference.
+    """
+    state = np.zeros((NUM_CHANNELS, GRID_HEIGHT, GRID_WIDTH), dtype=np.float32)
+    state[0] = WALL_MAP
+
+    for fx, fy in pellets:
+        if 0 <= fy < GRID_HEIGHT and 0 <= fx < GRID_WIDTH:
+            state[1, fy, fx] = 1.0
+
+    px, py = pacman_pos
+    if 0 <= py < GRID_HEIGHT and 0 <= px < GRID_WIDTH:
+        state[2, py, px] = 1.0
+
+    for gx, gy in ghost_positions:
+        if 0 <= gy < GRID_HEIGHT and 0 <= gx < GRID_WIDTH:
+            state[3, gy, gx] = 1.0
+
+    # Temporal positions for velocity / direction inference
+    ppx, ppy = prev_pacman_pos if prev_pacman_pos is not None else pacman_pos
+    if 0 <= ppy < GRID_HEIGHT and 0 <= ppx < GRID_WIDTH:
+        state[4, ppy, ppx] = 1.0
+
+    prev_ghosts = prev_ghost_positions if prev_ghost_positions is not None else ghost_positions
+    for pgx, pgy in prev_ghosts:
+        if 0 <= pgy < GRID_HEIGHT and 0 <= pgx < GRID_WIDTH:
+            state[5, pgy, pgx] = 1.0
+
+    return state
 
 
 def encode_frame(
@@ -40,63 +89,18 @@ def encode_frame(
     ghost_positions: List[Tuple[int, int]],
     pellets: set,
 ) -> np.ndarray:
-    """
-    Render the current game state into a single 2D grid frame (21, 19)
-    using natural visual Z-ordering:
-      Empty: 0.0
-      Wall: -0.5
-      Pellet: +0.5
-      Pac-Man: +1.0
-      Ghost: -1.0 (overrides pellet when occupying the same tile)
-    """
-    frame = BASE_FRAME.copy()
-
-    # 1. Pellets (positive targets)
-    for fx, fy in pellets:
-        if 0 <= fy < GRID_HEIGHT and 0 <= fx < GRID_WIDTH:
-            frame[fy, fx] = VAL_PELLET
-
-    # 2. Pac-Man (self position)
-    px, py = pacman_pos
-    if 0 <= py < GRID_HEIGHT and 0 <= px < GRID_WIDTH:
-        frame[py, px] = VAL_PACMAN
-
-    # 3. Ghosts (highest priority hazard; overrides pellet if on same tile)
-    for gx, gy in ghost_positions:
-        if 0 <= gy < GRID_HEIGHT and 0 <= gx < GRID_WIDTH:
-            frame[gy, gx] = VAL_GHOST
-
-    return frame
-
-
-def encode_state(
-    pacman_pos: Tuple[int, int],
-    ghost_positions: List[Tuple[int, int]],
-    pellets: set,
-    history: List[np.ndarray] = None,
-    k: int = FRAME_STACK_SIZE,
-) -> np.ndarray:
-    """
-    Encode state with k stacked temporal frames (k, 21, 19).
-    If no history is provided, repeats the current frame k times.
-    """
-    curr = encode_frame(pacman_pos, ghost_positions, pellets)
-    if history and len(history) > 0:
-        frames = list(history)[-(k - 1):] + [curr]
-        while len(frames) < k:
-            frames.insert(0, frames[0])
-        return np.stack(frames, axis=0)
-    return np.repeat(curr[np.newaxis, :, :], k, axis=0)
+    """Backwards-compatibility alias for single-step encoding without history."""
+    return encode_state(pacman_pos, ghost_positions, pellets)
 
 
 if TORCH_AVAILABLE:
     class PacmanDQN(nn.Module):
         """
-        Deep Q-Network with temporal frame stacking (k=3).
-        Preserves exact spatial maze coordinates without destructive MaxPool downsampling.
+        Deep Q-Network with temporal velocity tracking across 6 unentangled channels.
+        Uses MaxPool2d(2) to provide a 10x10 receptive field for global maze vision.
         """
 
-        def __init__(self, in_channels: int = FRAME_STACK_SIZE, num_actions: int = 4):
+        def __init__(self, in_channels: int = NUM_CHANNELS, num_actions: int = 4):
             super().__init__()
 
             self.conv = nn.Sequential(
@@ -104,15 +108,13 @@ if TORCH_AVAILABLE:
                 nn.ReLU(),
                 nn.Conv2d(32, 64, kernel_size=3, padding=1),
                 nn.ReLU(),
-                # 1x1 conv to compress channels to 16 without destroying 21x19 coordinate resolution
-                nn.Conv2d(64, 16, kernel_size=1),
-                nn.ReLU(),
+                nn.MaxPool2d(kernel_size=2, stride=2),  # 21x19 -> 10x9
             )
 
-            # 16 channels * 21 height * 19 width = 6,384 features
+            # 64 channels * 10 height * 9 width = 5,760 features
             self.fc = nn.Sequential(
                 nn.Flatten(),
-                nn.Linear(16 * GRID_HEIGHT * GRID_WIDTH, 128),
+                nn.Linear(64 * 10 * 9, 128),
                 nn.ReLU(),
                 nn.Linear(128, num_actions),
             )

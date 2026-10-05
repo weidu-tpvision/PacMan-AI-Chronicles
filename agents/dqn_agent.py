@@ -1,8 +1,10 @@
 """
 Deep Q-Network Agent: Executes forward passes on the trained PyTorch CNN model.
+Uses unentangled 6-channel state encoding with velocity/momentum awareness.
 """
 
 import collections
+import logging
 import os
 import random
 import time
@@ -15,6 +17,7 @@ try:
     import torch
     from rl.dqn_model import (
         ACTION_TO_IDX,
+        NUM_CHANNELS,
         FRAME_STACK_SIZE,
         PacmanDQN,
         encode_frame,
@@ -23,6 +26,8 @@ try:
     TORCH_AVAILABLE = True
 except ImportError:
     TORCH_AVAILABLE = False
+
+from core.maze_data import GRID_WIDTH, OPPOSITE_DIRECTIONS
 
 
 def _resolve_model_path(filename: str) -> str:
@@ -40,40 +45,40 @@ def _resolve_model_path(filename: str) -> str:
 
 
 class DQNAgent:
-    """Deep Q-Network Agent running a convolutional neural network with temporal frame stacking."""
+    """Deep Q-Network Agent running a convolutional neural network with unentangled multi-channel velocity tracking."""
 
     def __init__(
         self,
         model_path: str = "dqn_pacman.pt",
-        name: str = "Deep Q-Network (DQN)",
-        k: int = FRAME_STACK_SIZE,
+        name: str = "Deep Q-Network (PyTorch DQN)",
+        k: int = NUM_CHANNELS,
     ):
         self.name = name
         self.category = "Deep Neural RL (PyTorch CNN)"
         self.k = k
-        self.frame_buffer = collections.deque(maxlen=self.k)
-        self.last_pos = None
+        self.prev_pacman: Optional[Tuple[int, int]] = None
+        self.prev_ghosts: Optional[List[Tuple[int, int]]] = None
         self.model_loaded = False
         self.model = None
 
         if TORCH_AVAILABLE:
             self.device = torch.device("cpu")
-            self.model = PacmanDQN(in_channels=self.k).to(self.device)
+            self.model = PacmanDQN(in_channels=NUM_CHANNELS).to(self.device)
             resolved = _resolve_model_path(model_path)
             if os.path.exists(resolved):
                 try:
                     self.model.load_state_dict(
-                        torch.load(resolved, map_location=self.device)
+                        torch.load(resolved, map_location=self.device, weights_only=True)
                     )
                     self.model_loaded = True
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logging.warning("Failed to load DQN model weights from %s: %s", resolved, exc)
             self.model.eval()
 
     def reset(self):
-        """Reset temporal frame buffer for a new game episode."""
-        self.frame_buffer.clear()
-        self.last_pos = None
+        """Reset temporal state tracking for a new game episode."""
+        self.prev_pacman = None
+        self.prev_ghosts = None
 
     def decide(
         self,
@@ -89,23 +94,37 @@ class DQNAgent:
             m = random.choice(legal_moves) if legal_moves else "left"
             return DecisionResult(m, {m: 1.0}, 1.0, 0.05, False)
 
-        curr_frame = encode_frame(pacman_pos, ghost_positions, pellets)
+        # Detect new episode or respawn if position jumped significantly (toroidal aware)
+        if self.prev_pacman is not None:
+            dx = abs(pacman_pos[0] - self.prev_pacman[0])
+            dx = min(dx, GRID_WIDTH - dx)
+            dy = abs(pacman_pos[1] - self.prev_pacman[1])
+            if dx + dy > 2:
+                self.prev_pacman = None
+                self.prev_ghosts = None
 
-        # Detect new episode or empty buffer
-        if len(self.frame_buffer) == 0:
-            for _ in range(self.k):
-                self.frame_buffer.append(curr_frame)
-        else:
-            self.frame_buffer.append(curr_frame)
+        state_arr = encode_state(
+            pacman_pos=pacman_pos,
+            ghost_positions=ghost_positions,
+            pellets=pellets,
+            prev_pacman_pos=self.prev_pacman,
+            prev_ghost_positions=self.prev_ghosts,
+        )
 
-        self.last_pos = pacman_pos
-        state_arr = np.stack(self.frame_buffer, axis=0)
+        # Update previous positions for next step
+        self.prev_pacman = pacman_pos
+        self.prev_ghosts = [tuple(g) for g in ghost_positions]
 
         with torch.no_grad():
             s_tensor = torch.from_numpy(state_arr).unsqueeze(0).to(self.device)
             raw_q = self.model(s_tensor).squeeze(0)
 
         legal_q = {m: raw_q[ACTION_TO_IDX[m]].item() for m in legal_moves}
+        if last_move and len(legal_moves) > 1:
+            opp = OPPOSITE_DIRECTIONS.get(last_move)
+            if opp in legal_q:
+                legal_q[opp] -= 1.0
+
         best_q = max(legal_q.values())
         best_moves = [m for m in legal_moves if legal_q[m] == best_q]
         choice = random.choice(best_moves)

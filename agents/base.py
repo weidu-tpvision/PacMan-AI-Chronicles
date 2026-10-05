@@ -4,7 +4,7 @@ Base classes, data models, and probability utilities for Pac-Man agents.
 
 from dataclasses import dataclass, field
 import math
-from typing import Dict, List, Optional, Protocol, Tuple
+from typing import Dict, List, Optional, Protocol, Set, Tuple
 
 
 @dataclass
@@ -15,18 +15,24 @@ class DecisionResult:
     confidence: float = 1.0
     latency_ms: float = 0.0
     is_live: bool = False
+    raw_response: Optional[dict] = field(default_factory=dict)
+    error_msg: Optional[str] = None
 
 
 class AgentProtocol(Protocol):
-    """Protocol defining the decision interface for all Pac-Man agents."""
+    """Protocol defining the decision and lifecycle interface for all Pac-Man agents."""
     name: str
     category: str
+
+    def reset(self) -> None:
+        """Reset internal temporal / episodic state if applicable."""
+        ...
 
     def decide(
         self,
         pacman_pos: Tuple[int, int],
         ghost_positions: List[Tuple[int, int]],
-        pellets: set,
+        pellets: Set[Tuple[int, int]],
         legal_moves: List[str],
         last_move: Optional[str] = None,
     ) -> DecisionResult:

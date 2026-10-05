@@ -5,6 +5,7 @@ Q-Learning agents with linear feature approximations:
 """
 
 import json
+import logging
 import os
 import random
 import time
@@ -48,6 +49,10 @@ class PretrainedQLearningAgent:
             "nearest_pellet_dist": -1.8,
             "reverse_penalty": -6.0,
         }
+
+    def reset(self) -> None:
+        """Stateless agent - reset is a no-op."""
+        pass
 
     def get_features(
         self,
@@ -144,10 +149,14 @@ class TrainedQLearningAgent:
 
         if os.path.exists(resolved_path):
             try:
-                with open(resolved_path, "r") as f:
+                with open(resolved_path, "r", encoding="utf-8") as f:
                     self.weights = json.load(f)
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.warning("Failed to load weights from %s: %s", resolved_path, exc)
+
+    def reset(self) -> None:
+        """Stateless agent - reset is a no-op."""
+        pass
 
     def get_features(
         self,

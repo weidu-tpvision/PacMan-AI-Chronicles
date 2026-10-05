@@ -10,6 +10,7 @@ from rl.dqn_model import (
     PacmanDQN,
     encode_frame,
     encode_state,
+    NUM_CHANNELS,
     FRAME_STACK_SIZE,
 )
 
@@ -20,5 +21,6 @@ __all__ = [
     "PacmanDQN",
     "encode_frame",
     "encode_state",
+    "NUM_CHANNELS",
     "FRAME_STACK_SIZE",
 ]

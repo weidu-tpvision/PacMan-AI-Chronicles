@@ -10,8 +10,8 @@ import statistics
 import time
 from typing import List, Tuple
 
-from decision_client import SystemOneAgent
-from maze_data import (
+from llm.decision_client import SystemOneAgent
+from core.maze_data import (
     DIRECTIONS,
     GRID_HEIGHT,
     GRID_WIDTH,

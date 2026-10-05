@@ -38,7 +38,7 @@ What happens when you pit modern **Generative AI (Large Language Models)** again
 | # | Agent Name | Paradigm | Technical Implementation | Inference Latency |
 | :-: | :--- | :--- | :--- | :-: |
 | **[1]** | **Random Baseline** | *Empirical Floor* | Uniform random distribution across legal corridors. | `0.00 ms` |
-| **[2]** | **Deep Q-Network (DQN)** | *Deep Reinforcement Learning* | 3-frame visual stack ($k=3$) $\rightarrow$ 2D ConvNet ($1\times1$ bottleneck, zero MaxPool loss) $\rightarrow$ Double-DQN. | `0.45 ms` |
+| **[2]** | **Deep Q-Network (DQN)** | *Deep Reinforcement Learning* | Unentangled 6-channel velocity stack $\rightarrow$ 2D ConvNet with 10×10 receptive field pooling $\rightarrow$ Double-DQN. | `0.26 ms` |
 | **[3]** | **Policy-Optimized RL** | *Evolutionary / Policy Search* | Cross-Entropy Method optimizing topological graph features (Junctions, traps, BFS). | `0.03 ms` |
 | **[4]** | **Greedy Heuristic** | *Symbolic / Expert Rules* | Hand-crafted priority rules balancing BFS food seeking and ghost evasion. | `0.02 ms` |
 | **[5]** | **Textbook Q-Learning** | *Classical TD-Learning* | Bellman equation updates on classic linear feature approximations. | `0.01 ms` |
@@ -81,11 +81,12 @@ In classical reinforcement learning, policy search methods (such as the Cross-En
 - **Unbounded Potential:** In our initial Phase 1 training run (1,200 episodes, ~12 minutes on CPU), DQN already reached **570.0 points** and **0.27 ms inference**. Because its representation capacity is vast and unconstrained by linear assumptions, extended training is expected to surpass all handcrafted heuristics.
 
 ### Phase 2 DQN Roadmap
-- [x] **Multi-Frame Temporal Velocity ($k=3$):** Stacked 3 consecutive frames with single-plane visual Z-order rendering, enabling the ConvNet to learn ghost velocities and momentum directly from temporal observations.
-- [x] **Automated Training Diagnostics:** Real-time metrics logging and 4-panel visual figure generation (vector SVG and raster PNG).
-- [ ] **Prioritized Experience Replay (PER):** Transition from uniform replay buffer sampling to TD-error proportional sampling to accelerate learning on rare, critical ghost escape events.
-- [ ] **Dueling DQN Architecture:** Decouple state value estimation $V(s)$ from action advantages $A(s, a)$ to stabilize Q-values in non-critical corridors.
-- [ ] **Extended Training Runs:** Scale from 1,200 episodes to 5,000+ episodes with cosine learning rate scheduling.
+- [x] **Unentangled Multi-Channel Frame Stacking (6 Channels)**: Separated discrete binary channels for Walls, Pellets, Pac-Man $(t, t-1)$, and Ghosts $(t, t-1)$ to eliminate ReLU sign ambiguity while capturing velocity vectors.
+- [x] **Global Receptive Field Pooling & Momentum Shaping**: 10×10 pooling for global pellet perception, anti-stall loop cutoff, and directional momentum preservation.
+- [x] **Automated Training Diagnostics**: Real-time metrics logging and 4-panel visual figure generation (vector SVG and raster PNG).
+- [ ] **Prioritized Experience Replay (PER)**: Transition from uniform replay buffer sampling to TD-error proportional sampling to accelerate learning on rare, critical ghost escape events.
+- [ ] **Dueling DQN Architecture**: Decouple state value estimation $V(s)$ from action advantages $A(s, a)$ to stabilize Q-values in non-critical corridors.
+- [ ] **Extended Training Runs**: Scale from 1,200 episodes to 5,000+ episodes with cosine learning rate scheduling.
 
 ---
 
@@ -148,6 +149,10 @@ python rl/train_q_learning.py --episodes 1500
 ### 5. Run the Automated Test Suite
 
 ```bash
+# Run full automated test discovery:
+python -m unittest discover tests
+
+# Or run individual test suites:
 python tests/test_agents.py
 python tests/test_system_one.py
 ```
@@ -197,6 +202,7 @@ PacMan-AI-Chronicles/
 ├── pacman_game.py               # Interactive Pygame visualizer and arena
 ├── compare_baselines.py         # Head-to-Head tournament runner
 ├── benchmark.py                 # Latency / throughput profiler
+├── web_arena.py                 # Zero-dependency browser visualizer (HTML5/Canvas)
 ├── LICENSE                      # MIT Open Source License
 └── requirements.txt             # Pinned runtime dependencies
 ```

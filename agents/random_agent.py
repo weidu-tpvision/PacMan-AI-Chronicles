@@ -17,6 +17,10 @@ class RandomAgent:
         self.name = name
         self.category = "Baseline (Lower Bound)"
 
+    def reset(self) -> None:
+        """Stateless agent - reset is a no-op."""
+        pass
+
     def decide(
         self,
         pacman_pos: Tuple[int, int],

@@ -31,6 +31,8 @@ from llm.decision_client import SystemOneAgent
 
 
 def run_episode(agent, seed: int, max_moves: int = 150) -> Dict:
+    if hasattr(agent, "reset"):
+        agent.reset()
     env = Environment(seed=seed)
     moves_count = 0
     pellets_eaten = 0
@@ -45,8 +47,12 @@ def run_episode(agent, seed: int, max_moves: int = 150) -> Dict:
         safe_moves = []
         for m in legal:
             dx, dy = DIRECTIONS[m]
-            nx, ny = env.pacman_pos[0] + dx, env.pacman_pos[1] + dy
-            min_g = min(abs(nx - gx) + abs(ny - gy) for gx, gy in env.ghost_positions)
+            nx = (env.pacman_pos[0] + dx) % GRID_WIDTH
+            ny = env.pacman_pos[1] + dy
+            min_g = min(
+                min(abs(nx - gx), GRID_WIDTH - abs(nx - gx)) + abs(ny - gy)
+                for gx, gy in env.ghost_positions
+            )
             if min_g > 1:
                 safe_moves.append(m)
 
@@ -61,8 +67,12 @@ def run_episode(agent, seed: int, max_moves: int = 150) -> Dict:
         latencies.append(res.latency_ms)
 
         dx, dy = DIRECTIONS[choice]
-        nx, ny = env.pacman_pos[0] + dx, env.pacman_pos[1] + dy
-        chosen_min_g = min(abs(nx - gx) + abs(ny - gy) for gx, gy in env.ghost_positions)
+        nx = (env.pacman_pos[0] + dx) % GRID_WIDTH
+        ny = env.pacman_pos[1] + dy
+        chosen_min_g = min(
+            min(abs(nx - gx), GRID_WIDTH - abs(nx - gx)) + abs(ny - gy)
+            for gx, gy in env.ghost_positions
+        )
         if chosen_min_g <= 1 and len(safe_moves) > 0:
             blunders += 1
 

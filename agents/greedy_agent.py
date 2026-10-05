@@ -23,6 +23,10 @@ class GreedyHeuristicAgent:
         self.name = name
         self.category = "Handcrafted Rules (0.01ms)"
 
+    def reset(self) -> None:
+        """Stateless agent - reset is a no-op."""
+        pass
+
     def decide(
         self,
         pacman_pos: Tuple[int, int],
@@ -37,6 +41,11 @@ class GreedyHeuristicAgent:
 
         px, py = pacman_pos
         scores = {}
+        # Pre-select spatially closest pellets once per decision step
+        nearby_pellets = (
+            sorted(pellets, key=lambda p: abs(px - p[0]) + abs(py - p[1]))[:30]
+            if pellets else []
+        )
 
         for m in legal_moves:
             dx, dy = DIRECTIONS[m]
@@ -70,10 +79,9 @@ class GreedyHeuristicAgent:
             if (nx, ny) in pellets:
                 score += 50.0
 
-            if pellets:
-                sample_pellets = list(pellets)[:30]
+            if nearby_pellets:
                 min_pellet_dist = min(
-                    MAZE_DIST_MATRIX.get(((nx, ny), p), 99) for p in sample_pellets
+                    MAZE_DIST_MATRIX.get(((nx, ny), p), 99) for p in nearby_pellets
                 )
                 score -= min_pellet_dist * 2.0
 

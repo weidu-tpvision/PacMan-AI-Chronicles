@@ -16,6 +16,11 @@ class SystemOneBaselineAgent:
         self.name = name or f"System 1 ({getattr(agent, 'model', 'default')})"
         self.category = "Neural Zero-Shot (~90ms)"
 
+    def reset(self) -> None:
+        """Reset wrapped agent state if supported."""
+        if hasattr(self.agent, "reset"):
+            self.agent.reset()
+
     def decide(
         self,
         pacman_pos: Tuple[int, int],

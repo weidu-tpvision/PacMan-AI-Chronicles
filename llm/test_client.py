@@ -3,8 +3,8 @@ Headless test runner for the System 1 decision engine.
 Validates state extraction, question formatting, and decision generation.
 """
 
-from decision_client import SystemOneAgent
-from maze_data import DIRECTIONS, MAZE_LAYOUT, START_POSITIONS
+from llm.decision_client import SystemOneAgent
+from core.maze_data import DIRECTIONS, MAZE_LAYOUT, START_POSITIONS
 
 
 def test_decision_pipeline():

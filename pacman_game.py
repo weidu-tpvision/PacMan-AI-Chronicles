@@ -9,6 +9,7 @@ Seamlessly compare 40 years of AI decision paradigms in real-time:
 import argparse
 import collections
 import math
+import os
 import random
 import sys
 import threading
@@ -73,6 +74,7 @@ class PacmanGame:
         speed: float = 6.0,
         initial_agent_idx: int = 1,
     ):
+        os.environ["SDL_VIDEO_CENTERED"] = "1"
         pygame.init()
         pygame.display.set_caption("PacMan-AI-Chronicles | 40 Years of AI Decision Paradigms")
 
@@ -85,6 +87,18 @@ class PacmanGame:
         self.screen_height = max(self.maze_height, 640)
         self.screen = pygame.display.set_mode((self.screen_width, self.screen_height))
         self.clock = pygame.time.Clock()
+
+        # Force window to foreground on Windows
+        try:
+            import ctypes
+            hwnd = pygame.display.get_wm_info().get("window")
+            if hwnd:
+                ctypes.windll.user32.ShowWindow(hwnd, 5)  # SW_SHOW
+                ctypes.windll.user32.BringWindowToTop(hwnd)
+                ctypes.windll.user32.SetForegroundWindow(hwnd)
+                ctypes.windll.user32.SwitchToThisWindow(hwnd, True)
+        except Exception:
+            pass
 
         # Fonts
         self.font_title = pygame.font.SysFont("Segoe UI", 18, bold=True)
@@ -183,11 +197,16 @@ class PacmanGame:
         if idx != self.active_idx:
             self.active_idx = idx
             c = self.current_controller
+            if hasattr(c["agent"], "reset"):
+                c["agent"].reset()
             self.banner_text = f"Switched AI: {c['name']}"
             self.banner_timer = 2.0
 
     def reset_game(self):
         """Reset full game to initial state."""
+        for c in self.controllers:
+            if hasattr(c["agent"], "reset"):
+                c["agent"].reset()
         self.pacman_pos = list(START_POSITIONS["pacman"])
         self.pacman_visual = [float(self.pacman_pos[0]), float(self.pacman_pos[1])]
         self.pacman_dir = "left"
@@ -721,6 +740,13 @@ class PacmanGame:
             self.screen.blit(pause_txt, (panel_x + pad, self.screen_height - 30))
 
     def run(self):
+        # Initial frame render to ensure instant window display
+        self.screen.fill(COLOR_BG)
+        self.draw_maze()
+        self.draw_telemetry_panel()
+        pygame.display.flip()
+        pygame.event.pump()
+
         running = True
         while running:
             dt = self.clock.tick(60) / 1000.0
@@ -729,7 +755,9 @@ class PacmanGame:
                 if event.type == pygame.QUIT:
                     running = False
                 elif event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_SPACE:
+                    if event.key == pygame.K_ESCAPE or event.key == pygame.K_q:
+                        running = False
+                    elif event.key == pygame.K_SPACE:
                         if self.paused:
                             self.step_once = True
                             self.paused = False
@@ -781,7 +809,7 @@ def main():
         "--agent",
         type=int,
         default=0,
-        help="Initial active agent index (0: RL Optimized, 1: System 1, 2: Greedy, 3: Q-Textbook, 4: Random)",
+        help="Initial active agent index (0: RL Optimized, 1: DQN, 2: System 1, 3: Greedy, 4: Q-Textbook, 5: Random)",
     )
     args = parser.parse_args()
 
@@ -792,6 +820,18 @@ def main():
         speed=args.speed,
         initial_agent_idx=args.agent,
     )
+
+    print(f"\n==========================================================================================", flush=True)
+    print(f" PACMAN-AI-CHRONICLES: Interactive Visual Arena", flush=True)
+    print(f"==========================================================================================", flush=True)
+    print(f" * Screen Size: {game.screen_width}x{game.screen_height} (Centered on screen)", flush=True)
+    print(f" * Active AI:   {game.current_controller['name']}", flush=True)
+    print(f" * Speed:       {game.move_speed:.0f} tiles/sec", flush=True)
+    print(f"------------------------------------------------------------------------------------------", flush=True)
+    print(f" [!] Window is active! If hidden behind your terminal, check the taskbar.", flush=True)
+    print(f"     Keys: [1]-[6] Switch AI | [Space] Pause | [S] Speed | [R] Reset | [ESC/Q] Quit", flush=True)
+    print(f"==========================================================================================\n", flush=True)
+
     game.run()
 
 
