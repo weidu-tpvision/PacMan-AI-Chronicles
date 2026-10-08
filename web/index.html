@@ -186,7 +186,7 @@
       <div class="agent-header">
         <span id="agentName">Deep Q-Network (DQN)</span>
         <span class="badge" id="agentBadge" style="background: rgba(236,72,153,0.2); color:#f472b6; border-color:rgba(236,72,153,0.4);">
-          6-Channel PyTorch CNN
+          PyTorch CNN (30-ch encoder)
         </span>
       </div>
       <div class="agent-sub" id="agentSub">Learned from raw spatial tensors with temporal momentum</div>
@@ -273,20 +273,65 @@ const ctx = canvas.getContext("2d");
 const TILE = 26;
 
 let state = null;
+let walls = [];
 let isPaused = false;
 let mouthAngle = 0.2;
 let mouthDir = 1;
+const STEP_INTERVALS_MS = [140, 70, 35];
+let speedIdx = 1;
+let eventText = null;
+let eventUntil = 0;
 
-async function fetchState() {
-  if (isPaused) return;
-  try {
-    const res = await fetch("/api/step", { method: "POST" });
-    const data = await res.json();
-    state = data;
-    render(data);
-  } catch (e) {
-    console.error(e);
+const EVENT_LABELS = {
+  life_lost: () => "LIFE LOST",
+  level_cleared: (d) => `LEVEL ${d.level}`,
+  game_over: (_, score) => `GAME OVER - ${score} pts`,
+};
+
+async function stepOnce() {
+  const res = await fetch("/api/step", { method: "POST" });
+  const data = await res.json();
+  if (data.event) {
+    const [kind, arg] = data.event.split(":");
+    const label = EVENT_LABELS[kind];
+    if (label) {
+      eventText = label(data, arg);
+      eventUntil = performance.now() + 1500;
+    }
   }
+  state = data;
+  render(data);
+}
+
+// Self-scheduling loop: the next step is requested only after the previous response
+// arrives, so slow (live System 1) decisions never pile up concurrent requests.
+async function gameLoop() {
+  const started = performance.now();
+  if (!isPaused) {
+    try {
+      await stepOnce();
+    } catch (e) {
+      console.error(e);
+    }
+  }
+  updateStatusBadge();
+  const wait = Math.max(0, STEP_INTERVALS_MS[speedIdx] - (performance.now() - started));
+  setTimeout(gameLoop, wait);
+}
+
+function updateStatusBadge() {
+  const badge = document.getElementById("statusBadge");
+  let text, bg, fg;
+  if (eventText && performance.now() < eventUntil) {
+    text = eventText; bg = "rgba(239,68,68,0.2)"; fg = "#f87171";
+  } else if (isPaused) {
+    text = "PAUSED"; bg = "rgba(245,158,11,0.2)"; fg = "#fbbf24";
+  } else {
+    text = state ? `RUNNING - LVL ${state.level}` : "RUNNING"; bg = "rgba(168,85,247,0.2)"; fg = "#c084fc";
+  }
+  badge.innerText = text;
+  badge.style.background = bg;
+  badge.style.color = fg;
 }
 
 function render(data) {
@@ -298,7 +343,7 @@ function render(data) {
 
   // 1. Draw Walls
   ctx.fillStyle = "#475569";
-  for (const [x, y] of data.walls) {
+  for (const [x, y] of walls) {
     ctx.beginPath();
     ctx.roundRect(x * TILE + 1, y * TILE + 1, TILE - 2, TILE - 2, 4);
     ctx.fill();
@@ -370,6 +415,7 @@ function render(data) {
   document.getElementById("statScore").innerText = data.score;
   document.getElementById("statPellets").innerText = data.pellets_left;
   document.getElementById("statMoves").innerText = data.moves;
+  document.getElementById("statLives").innerText = "❤️".repeat(Math.max(0, data.lives)) || "-";
   document.getElementById("choiceTag").innerText = data.decision.choice;
   document.getElementById("decisionMeta").innerText = `Latency: ${data.decision.latency_ms.toFixed(2)} ms | Conf: ${data.decision.confidence.toFixed(2)}`;
 
@@ -411,17 +457,26 @@ window.addEventListener("keydown", (e) => {
   if (e.key >= "1" && e.key <= "6") {
     switchAgent(parseInt(e.key) - 1);
   } else if (e.code === "Space") {
+    e.preventDefault();
     isPaused = !isPaused;
-    document.getElementById("statusBadge").innerText = isPaused ? "PAUSED" : "RUNNING";
-    document.getElementById("statusBadge").style.background = isPaused ? "rgba(245,158,11,0.2)" : "rgba(168,85,247,0.2)";
-    document.getElementById("statusBadge").style.color = isPaused ? "#fbbf24" : "#c084fc";
+    updateStatusBadge();
+  } else if (e.key === "s" || e.key === "S") {
+    speedIdx = (speedIdx + 1) % STEP_INTERVALS_MS.length;
   } else if (e.key === "r" || e.key === "R") {
     resetBoard();
   }
 });
 
-// Run game loop at ~15 updates per second
-setInterval(fetchState, 70);
+// Static walls are fetched once; /api/step responses omit them.
+fetch("/api/state")
+  .then((res) => res.json())
+  .then((data) => {
+    walls = data.walls || [];
+    state = data;
+    render(data);
+  })
+  .catch((e) => console.error(e))
+  .finally(gameLoop);
 </script>
 </body>
 </html>

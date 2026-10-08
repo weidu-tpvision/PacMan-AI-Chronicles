@@ -114,10 +114,13 @@ class TestAgentSuite(unittest.TestCase):
         )
         self.assertEqual(dqn.prev_pacman, (GRID_WIDTH - 1, 9))
 
-        # Step 4: True jump/respawn across maze (dist > 2) should wipe temporal tracking
+        # Step 4: position jumps (respawn / new episode) are the caller's responsibility:
+        # there is no in-agent teleport heuristic; reset() clears temporal tracking.
         dqn.decide((5, 18), [(5, 7)], set(), ["up", "down"])
-        # Next decision should record new position
         self.assertEqual(dqn.prev_pacman, (5, 18))
+        dqn.reset()
+        self.assertIsNone(dqn.prev_pacman)
+        self.assertIsNone(dqn.prev_ghosts)
 
 
 if __name__ == "__main__":

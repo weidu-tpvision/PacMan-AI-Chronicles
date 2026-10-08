@@ -48,3 +48,6 @@ desktop.ini
 
 # Logs (keep dqn_training.log as benchmark artifact)
 *.tmp
+
+# Test / tool caches
+.pytest_cache/

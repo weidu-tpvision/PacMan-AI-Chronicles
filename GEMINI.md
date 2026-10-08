@@ -14,9 +14,13 @@ Welcome to **PacMan-AI-Chronicles**. This document serves as the canonical conte
 │ Expert Rules │ ──> │ Classical RL │ ──> │ Policy Optim (ES) │ ──> │    Deep RL (DQN)    │ ──> │   System 1 LLM  │
 │ (Greedy BFS) │     │ (Linear TD)  │     │   (CEM Search)    │     │  (PyTorch ConvNet)  │     │  (Transformer)  │
 └──────────────┘     └──────────────┘     └───────────────────┘     └─────────────────────┘     └─────────────────┘
-    0.02 ms               0.01 ms                0.03 ms                    0.26 ms                   93.0 ms
-    860 pts               610 pts                926 pts                    500 pts                   360 pts
+   µs-scale            µs-scale              µs-scale                   sub-ms, CPU-only         ~100 ms / decision
 ```
+
+> Experiment scores and timings are **not** recorded in this document — the engine and
+> policies change too quickly for prose snapshots to stay true. The single sources of truth
+> are the generated artifacts: `results/tournament_results.json` (tournament) and
+> `rl/weights/` (DQN checkpoint, metrics JSON/CSV, training log, diagnostic figures).
 
 The core research question investigates: *Can Large Language Models (LLMs) act as fast "System 1" reflexive game controllers, and how do they scale against Classical RL, Evolutionary Search, and Deep Q-Networks?*
 
@@ -30,14 +34,18 @@ system_one/
 ├── core/                        # Core Engine & Simulation
 │   ├── maze_data.py             # ASCII layout, dimensions, graph BFS analytics, junctions
 │   ├── environment.py           # Standardized headless Pac-Man simulator with collision logic
+│   ├── seeds.py                 # Disjoint TRAIN/VAL/TEST seed ranges & global seeding
 │   └── __init__.py              # Core exports
 │
 ├── agents/                      # Decoupled AI Agent Implementations
 │   ├── base.py                  # AgentProtocol, DecisionResult, softmax utilities
+│   ├── features.py              # Shared linear-feature extractors (train/inference parity)
+│   ├── paths.py                 # Checkpoint / weight path resolution
+│   ├── registry.py              # Controller registry shared by both arenas
 │   ├── random_agent.py          # Uniform random baseline
 │   ├── greedy_agent.py          # Hand-crafted multi-objective heuristic planner
 │   ├── q_learning_agent.py      # Linear feature Q-learning agents (Textbook & Trained)
-│   ├── dqn_agent.py             # PyTorch ConvNet inference agent with k=3 frame buffer
+│   ├── dqn_agent.py             # PyTorch ConvNet inference agent with temporal position tracking
 │   ├── system_one_agent.py      # LLM / Ollama wrapper agent
 │   └── __init__.py              # Agent registry exports
 │
@@ -48,7 +56,7 @@ system_one/
 │   ├── train_q_learning.py      # Approximate linear TD Q-learning trainer
 │   ├── optimize_policy.py       # Cross-Entropy Method (CEM) evolutionary policy search
 │   ├── weights/                 # Checkpoints, learned weights & diagnostics
-│   │   ├── dqn_pacman.pt        # Trained PyTorch CNN checkpoint (Peak val: 440.0)
+│   │   ├── dqn_pacman.pt        # Latest best-validation DQN checkpoint (see metrics JSON)
 │   │   ├── dqn_training.log     # Detailed milestone console log
 │   │   ├── dqn_training_metrics.json # Full per-episode metrics
 │   │   ├── dqn_training_metrics.csv  # CSV metrics export
@@ -65,7 +73,8 @@ system_one/
 │
 ├── tests/                       # Automated Test Suite
 │   ├── test_agents.py           # Agent instantiation and decision verification
-│   └── test_system_one.py       # Schema and fallback verification
+│   ├── test_system_one.py       # Schema and fallback verification
+│   └── test_review_regressions.py # Regression coverage for prior code-review fixes
 │
 ├── pacman_game.py               # Interactive visual Pygame arena (Live hot-swapping [1]-[6])
 ├── compare_baselines.py         # Multi-agent tournament benchmark runner
@@ -82,14 +91,15 @@ system_one/
 
 The DQN subsystem implements DeepMind-inspired Deep Reinforcement Learning with unentangled multi-channel perception and velocity awareness:
 
-### 1. Unentangled 6-Channel Binary State Encoding (`encode_state`)
-Rather than compressing objects into a scalar matrix where negative values collide under ReLU, the state is represented as a discrete 6-channel binary tensor `(6, 21, 19)` where all entries are strictly $\{0.0, 1.0\}$:
+### 1. Markov-Oriented 30-Channel State Encoding (`encode_state`)
+Rather than compressing objects into a scalar matrix where negative values collide under ReLU, the state is a 30-channel tensor `(30, 21, 19)` built from binary spatial maps plus normalized scalar planes (see `rl/dqn_model.py` and `dqn.md` for the authoritative description):
 * **Channel 0**: Static Walls ($1.0 = \text{Wall}$, $0.0 = \text{Corridor}$)
 * **Channel 1**: Pellets remaining ($1.0 = \text{Pellet}$, $0.0 = \text{Empty}$)
-* **Channel 2**: Pac-Man current position at $t$ ($1.0 = \text{Pac-Man}$)
-* **Channel 3**: Ghost current positions at $t$ ($1.0 = \text{Ghost}$)
-* **Channel 4**: Pac-Man previous position at $t-1$ ($1.0 = \text{Pac-Man}$)
-* **Channel 5**: Ghost previous positions at $t-1$ ($1.0 = \text{Ghost}$)
+* **Channels 2–3**: Pac-Man current position at $t$ and previous position at $t-1$
+* **Channels 4–9**: Per-ghost current and previous position maps (identity-preserving: one pair per ghost, since ghosts have distinct behaviors)
+* **Channels 10–13**: Pac-Man heading (one-hot `up/down/left/right` planes)
+* **Channels 14–25**: Per-ghost heading one-hot planes (4 per ghost)
+* **Channels 26–29**: Global scalar planes — scatter-mode flag, Scatter/Chase cycle phase, stall progress, remaining episode horizon
 
 ### 2. Temporal Velocity Tracking & Inertia
 * By cross-correlating Channels $(2, 4)$ and $(3, 5)$, 2D convolutional kernels directly compute **velocity vectors $(\Delta x, \Delta y)$ and headings** for both Pac-Man and all ghosts without hand-crafted physics.
@@ -98,50 +108,30 @@ Rather than compressing objects into a scalar matrix where negative values colli
 * **Anti-Orbit Dynamic Memory**: A 16-step rolling position buffer (`recent_positions`) tracks repeated tile visits during inference. When no pellets have been eaten and a candidate move leads into repeatedly visited empty corridors ($\ge 2$ visits), a scaled loop penalty (`visit_count * 20.0`) is subtracted, allowing the agent to exit local corridor limit cycles without retraining.
 
 ### 3. Global Receptive Field Neural Architecture (`PacmanDQN`)
-* **Input**: `(batch, 6, 21, 19)`
-* **Conv 1**: `Conv2d(6, 32, kernel=3, padding=1)` + ReLU (local entity & velocity detection)
+* **Input**: `(batch, 30, 21, 19)`
+* **Conv 1**: `Conv2d(30, 32, kernel=3, padding=1)` + ReLU (local entity & velocity detection)
 * **Conv 2**: `Conv2d(32, 64, kernel=3, padding=1)` + ReLU (corridor & intersection features)
-* **Pooling**: `MaxPool2d(kernel=2, stride=2)` ($21 \times 19 \to 10 \times 9$, expanding the receptive field to $10 \times 10$ tiles so the agent perceives distant pellet clusters across the maze)
+* **Pooling**: `MaxPool2d(kernel=2, stride=2)` ($21 \times 19 \to 10 \times 9$, expanding the receptive field so the agent perceives distant pellet clusters across the maze)
 * **Shared feature head**: `Linear(5760, 128)` + ReLU
 * **Dueling heads**: `Linear(128, 1)` for state value $V(s)$ and `Linear(128, 4)` for action advantages $A(s,a)$.
 * **Aggregation**: $Q(s,a)=V(s)+A(s,a)-\operatorname{mean}_{a'}A(s,a')$, outputting Q-values for `[up, down, left, right]`.
-* **Total Parameters**: $\approx 758\text{k}$ (~0.26 ms CPU inference)
 
 ### 4. Double DQN & Optimization
-* **Target Network**: Decouples action selection from action evaluation to eliminate maximization bias:
+* **Target Network**: Decouples action selection from action evaluation to eliminate maximization bias; next-action selection is masked to legal moves:
   $$y = r + \gamma (1 - d) Q_{\text{target}}\left(s', \arg\max_{a' \in A_{\text{legal}}(s')} Q_{\text{policy}}(s', a')\right)$$
 * **Prioritized replay**: Samples transitions in proportion to $(|\delta|+\epsilon)^{0.6}$ and applies annealed importance-sampling weights to the per-item Huber loss.
 * **Loss**: Smooth L1 (Huber) Loss with gradient norm clipping (`max_norm = 5.0`).
 * **Optimizer**: Adam with cosine annealing from $5 \times 10^{-4}$ to $5 \times 10^{-5}$ over the requested episode count.
-* **Tournament Score**: **126.6 pts** (32.7 pellets, 40.8 moves across 100 seeded episodes under unified Scatter/Chase dynamics).
+* **Tournament scores**: see `results/tournament_results.json` (regenerate with `compare_baselines.py`); never record them here.
 
-### 5. Training Analysis & Diagnostic Protocol (Mandatory for Every Run)
-Every DQN training run must follow this standardized automated diagnostic and analysis workflow:
+### 5. Training Diagnostic Protocol (Mandatory for Every Run)
+Every DQN training run must follow this standardized automated diagnostic workflow:
 
 1. **Per-Episode Metrics Logging**: Record `episode`, `score`, `train_avg_score`, `pellets`, `reward`, `steps`, `loss`, `epsilon`, `learning_rate`, `val_score`, and `val_pellets` in [`rl/weights/dqn_training_metrics.json`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/rl/weights/dqn_training_metrics.json) and `.csv`.
 2. **Automated Multi-Panel Figure Generation**: The training runner must execute [`rl/plot_metrics.py`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/rl/plot_metrics.py) at the end of training to generate:
    * **Vector Dashboard**: [`rl/weights/dqn_training_figures.svg`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/rl/weights/dqn_training_figures.svg) (scalable publication quality).
    * **Raster Dashboard**: [`rl/weights/dqn_training_figures.png`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/rl/weights/dqn_training_figures.png) (4-panel visual dashboard).
-3. **Quantitative Quartile Analysis**: Compute statistical quartile breakdowns (Scores, Pellets, Huber Loss, Survival Rate) and record empirical conclusions in [`GEMINI.md`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/GEMINI.md) and [`dqn_training_report.md`](file:///C:/Users/wei.du/.gemini/antigravity/brain/f618c489-8aab-47b9-a653-927a9b62b8ae/dqn_training_report.md).
-
-#### Empirical Training Analysis & Findings (1,200 Episodes):
-
-| Quartile | $\epsilon$ Range | Avg Score | Avg Pellets (Max) | Avg Steps | Huber Loss | Survival Rate |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Q1 (Eps 1–300)** | $0.998 \to 0.472$ | $-80.0$ | $11.9$ ($42$) | $26.9$ | $10.63$ | **9.7%** |
-| **Q2 (Eps 301–600)** | $0.471 \to 0.223$ | $+1.3$ | $20.1$ ($68$) | $33.5$ | $14.82$ | **42.3%** |
-| **Q3 (Eps 601–900)** | $0.222 \to 0.105$ | $-36.8$ | $16.1$ ($54$) | $25.8$ | $23.31$ | **22.3%** |
-| **Q4 (Eps 901–1200)** | $0.105 \to 0.050$ | **$+22.1$** | **$21.9$** (**$80$**) | **$36.5$** | $21.25$ | **46.3%** |
-
-#### Core Empirical Conclusions:
-* **Scatter Window Exploitation**: Training on the unified environment with 28/7 Chase/Scatter cycling enabled the CNN to learn aggressive corridor clearing when ghosts scatter. Single-episode pellet peaks jumped to **80 pellets** in Q4.
-* **Positive Score Cross-Over**: By Q2 and Q4, net training scores crossed into solid positive territory ($+1.3$ in Q2, $+22.1$ in Q4) with survival rates reaching **$46.3\%$**.
-* **Loss Dynamics**: Huber loss stabilized around $\sim 21$ in late training as the network resolved high-reward scatter clearing opportunities vs. ambush traps.
-* **Peak Policy Checkpoint**: The best validation checkpoint was saved at **Episode 400** (Validation score: **$+148.0\text{ pts}$**, **$34.8\text{ pellets}$**), saved to [`rl/weights/dqn_pacman.pt`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/rl/weights/dqn_pacman.pt).
-
-#### Extended Training Run (5,000 Episodes)
-
-The current checkpoint and diagnostics come from a 5,000-episode run using prioritized replay, a dueling head, legal-action-masked Double-DQN targets, and cosine learning-rate annealing. The best mean validation score was **$+1,018.0$** at episode **4,900** over 20 fixed validation seeds; episode 5,000 validation was **$+810.5$**. Checkpoint selection retained episode 4,900. Validation scores are model-selection results, not held-out tournament scores.
+3. **Artifact-Only Results**: Training conclusions (validation means, best-checkpoint episode, quartile analyses) live in the artifacts above and in commit messages — **not** in this document, so this guide can never drift from the latest run.
 
 ### 6. Standardized Simulation Engine (`core.environment.Environment`)
 * **Single Source of Truth**: All game arenas ([`pacman_game.py`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/pacman_game.py), [`web_arena.py`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/web_arena.py)), training pipelines ([`rl/train_dqn.py`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/rl/train_dqn.py), [`rl/train_q_learning.py`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/rl/train_q_learning.py), [`rl/optimize_policy.py`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/rl/optimize_policy.py)), and tournament runners ([`compare_baselines.py`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/compare_baselines.py)) share the exact same `core.environment.Environment` engine.
@@ -184,8 +174,8 @@ python -m unittest discover tests
 python tests/test_agents.py
 python tests/test_system_one.py
 
-# 2. Run Tournament Benchmark (Head-to-head on identical seeds)
-python compare_baselines.py --episodes 10 --max-moves 150
+# 2. Run Tournament Benchmark (head-to-head on identical TEST seeds; default horizon = canonical 300)
+python compare_baselines.py --episodes 100 --offline
 
 # 3. Train DQN
 python rl/train_dqn.py --episodes 1200 --batch-size 64 --lr 0.0005

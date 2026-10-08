@@ -68,7 +68,10 @@ def compute_reward(
 
     `prev_move` MUST be Pac-Man's heading *before* this step (read it before env.step()).
     Returns (reward, stalled). A stall (STALL_STEPS consecutive steps without a pellet)
-    truncates the episode; it is not treated as a terminal state for bootstrapping.
+    truncates the episode. The training loop records stall and time-limit cutoffs as
+    terminal in replay (no bootstrapping), matching the finite-episode scoring used by
+    validation and the tournament; the horizon channel in the observation keeps the
+    value semantics consistent at that boundary.
     """
     r = R_STEP
     if ate:
@@ -101,7 +104,13 @@ def masked_next_actions(q_values: torch.Tensor, legal_action_masks: torch.Tensor
 
 
 class ReplayBuffer:
-    """Proportional prioritized replay with importance-sampling correction."""
+    """Proportional prioritized replay with importance-sampling correction.
+
+    States are stored as float16: the 26 binary channels are exact in fp16 and the 4
+    scalar planes keep ~3 decimal digits (ample for stall/horizon/cycle features),
+    halving buffer RAM (~3.6 GiB -> ~1.8 GiB at 40k capacity). sample() upcasts to
+    float32 tensors.
+    """
     def __init__(self, capacity: int = 40000, rng: Optional[random.Random] = None, alpha: float = 0.6, priority_epsilon: float = 1e-5):
         self.capacity = capacity
         self.buffer = []
@@ -115,7 +124,10 @@ class ReplayBuffer:
         max_priority = float(self.priorities[:len(self.buffer)].max()) if self.buffer else 1.0
         if next_action_mask is None:
             next_action_mask = np.ones(len(ACTION_TO_IDX), dtype=np.bool_)
-        item = (state, action_idx, reward, next_state, done, next_action_mask)
+        item = (
+            np.asarray(state, dtype=np.float16), action_idx, reward,
+            np.asarray(next_state, dtype=np.float16), done, next_action_mask,
+        )
         if len(self.buffer) < self.capacity:
             self.buffer.append(item)
         else:

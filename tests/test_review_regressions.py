@@ -29,6 +29,17 @@ class InvalidMoveAgent:
         return DecisionResult("unknown", error_msg="invalid action")
 
 
+class WallMoveAgent:
+    """Always answers "up", which is a wall at Pac-Man's spawn tile (9, 15)."""
+    name = "Wall move test agent"
+
+    def reset(self):
+        pass
+
+    def decide(self, *args):
+        return DecisionResult("up")
+
+
 class BlockingAgent:
     def __init__(self):
         self.started = threading.Event()
@@ -134,6 +145,88 @@ class TestReviewRegressions(unittest.TestCase):
         old_agent.release.set()
         time.sleep(0.02)
         self.assertEqual(game.latest_decision_result.choice, "right")
+
+    def test_tournament_counts_blocked_direction_once(self):
+        result = run_episode(WallMoveAgent(), seed=1000, max_moves=1)
+        self.assertEqual(result["invalid_actions"], 1)
+        self.assertEqual(result["illegal_moves"], 1)
+
+    def test_live_probe_rejects_reachable_host_without_systemone_endpoint(self):
+        from compare_baselines import probe_live_endpoint
+        from llm.decision_client import SystemOneAgent
+
+        # Nothing listens on port 9; pretend /api/version answered so only the probe can catch it.
+        backend = SystemOneAgent(host="http://127.0.0.1:9", timeout_sec=0.5)
+        backend.is_ollama_online = lambda force_refresh=False: True
+        self.assertFalse(probe_live_endpoint(backend))
+        self.assertEqual(len(backend.latencies), 0)
+
+    def test_registry_drops_score_badge_for_untrained_dqn(self):
+        from unittest import mock
+        import agents.registry as registry
+        from agents.dqn_agent import DQNAgent
+
+        untrained = lambda heuristics=True: DQNAgent(model_path="does_not_exist.pt", heuristics=heuristics)
+        with mock.patch.object(registry, "DQNAgent", untrained),              mock.patch.object(registry, "load_tournament_scores", lambda: {"DQN (+inference heuristics)": 586.7}):
+            controllers = registry.build_controllers(object(), "nimble")
+        dqn = next(c for c in controllers if c["id"] == "dqn")
+        self.assertIn("[UNTRAINED]", dqn["name"])
+        self.assertNotIn("pts", dqn["badge"])
+
+
+class TestWebArena(unittest.TestCase):
+    def setUp(self):
+        from web_arena import GameSession
+
+        self.session = GameSession()
+
+    def test_step_omits_static_walls_but_state_includes_them(self):
+        self.assertNotIn("walls", self.session.step())
+        self.assertTrue(self.session.get_state()["walls"])
+
+    def test_dqn_receives_full_horizon_in_open_ended_session(self):
+        captured = {}
+        agent = self.session.current_agent
+        original = agent.decide
+
+        def spy(*args, **kwargs):
+            captured.update(kwargs)
+            return original(*args, **kwargs)
+
+        agent.decide = spy
+        for _ in range(3):
+            self.session.step()
+        self.assertEqual(captured["steps_remaining"], captured["horizon"])
+
+    def test_concurrent_steps_are_serialized(self):
+        import json
+        import urllib.request
+        import web_arena
+
+        old_session = web_arena.session
+        web_arena.session = self.session
+        server = web_arena.ArenaHTTPServer(("127.0.0.1", 0), web_arena.ArenaHandler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            url = f"http://127.0.0.1:{server.server_address[1]}/api/step"
+            n_requests = 8
+
+            def post():
+                urllib.request.urlopen(urllib.request.Request(url, data=b"", method="POST"), timeout=10).read()
+
+            workers = [threading.Thread(target=post) for _ in range(n_requests)]
+            for w in workers:
+                w.start()
+            for w in workers:
+                w.join()
+            state_url = url.replace("/api/step", "/api/state")
+            state = json.loads(urllib.request.urlopen(state_url, timeout=10).read())
+            # Every step is applied exactly once (a game over would reset the counter).
+            self.assertEqual(state["moves"], n_requests)
+        finally:
+            server.shutdown()
+            server.server_close()
+            web_arena.session = old_session
 
 
 if __name__ == "__main__":

@@ -11,7 +11,6 @@ from rl.dqn_model import (
     encode_frame,
     encode_state,
     NUM_CHANNELS,
-    FRAME_STACK_SIZE,
 )
 
 __all__ = [
@@ -22,5 +21,4 @@ __all__ = [
     "encode_frame",
     "encode_state",
     "NUM_CHANNELS",
-    "FRAME_STACK_SIZE",
 ]

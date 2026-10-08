@@ -35,7 +35,14 @@ ORBIT_PENALTY_PER_VISIT = 20.0
 
 
 class DQNAgent:
-    """Deep Q-Network Agent running a convolutional neural network with unentangled multi-channel velocity tracking."""
+    """Deep Q-Network Agent running a convolutional neural network with unentangled multi-channel velocity tracking.
+
+    Lifecycle contract: callers MUST call reset() on every new episode and on every
+    life-loss respawn (both arenas, the tournament runner, and the trainers already do).
+    Between resets, temporal history (previous positions, orbit memory, mode clock) is
+    assumed continuous; there is intentionally no in-agent teleport heuristic, which
+    could silently leak stale pre-death state for deaths near the spawn point.
+    """
 
     def __init__(
         self,
@@ -141,14 +148,6 @@ class DQNAgent:
                 m, {mv: p for mv in legal_moves}, 0.0, (time.perf_counter() - t0) * 1000.0, False,
                 error_msg="untrained fallback",
             )
-
-        # Detect new episode or respawn if position jumped significantly (toroidal aware)
-        if self.prev_pacman is not None:
-            dx = abs(pacman_pos[0] - self.prev_pacman[0])
-            dx = min(dx, GRID_WIDTH - dx)
-            dy = abs(pacman_pos[1] - self.prev_pacman[1])
-            if dx + dy > 2:
-                self.reset()
 
         # Update visit history to detect and break local corridor loops
         curr_pellets = len(pellets)

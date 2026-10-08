@@ -24,7 +24,7 @@ except ImportError:
 from agents.base import DecisionResult
 from agents.dqn_agent import DQNAgent
 from agents.registry import build_controllers
-from core.environment import SCORE_DEATH, SCORE_PELLET, SCORE_WIN, Environment
+from core.environment import DEFAULT_MAX_STEPS, SCORE_DEATH, SCORE_PELLET, SCORE_WIN, Environment
 from core.maze_data import GRID_HEIGHT, GRID_WIDTH
 from llm.decision_client import SystemOneAgent
 
@@ -197,6 +197,9 @@ class PacmanGame:
                     pac_pos, ghost_pos, pellets_copy, legal_copy, last_move,
                     mode_step=mode_step, ghost_dirs=ghost_dirs,
                     steps_without_pellet=steps_without_pellet,
+                    # Open-ended session: keep the horizon plane at "full episode ahead"
+                    # instead of letting it count down to 0 (never seen in training).
+                    steps_remaining=DEFAULT_MAX_STEPS, horizon=DEFAULT_MAX_STEPS,
                 )
             else:
                 res = active_agent.decide(pac_pos, ghost_pos, pellets_copy, legal_copy, last_move)

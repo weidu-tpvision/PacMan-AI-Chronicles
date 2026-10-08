@@ -47,7 +47,7 @@ def generate_svg(metrics: List[Dict], output_svg_path: str):
         f'  .legend {{ font-size: 11px; font-weight: 500; }}',
         f'</style>',
         f'<text x="{margin}" y="35" class="title">Deep Q-Network (DQN) Pac-Man Training Diagnostics</text>',
-        f'<text x="{margin + 580}" y="35" class="subtitle">Architecture: 3-Frame Visual Stack (k=3), Double DQN, No MaxPool</text>',
+        f'<text x="{margin + 580}" y="35" class="subtitle">Architecture: 30-Channel Spatial Encoder, Dueling Double DQN, MaxPool2d(2)</text>',
     ]
 
     def draw_panel(px, py, title, color):
@@ -167,7 +167,7 @@ def generate_png(metrics: List[Dict], output_png_path: str):
     font_lbl = pygame.font.SysFont("Arial", 11)
 
     t_img = font_title.render("Deep Q-Network (DQN) Pac-Man Training Diagnostics", True, (236, 240, 241))
-    s_img = font_sub.render("Architecture: 3-Frame Visual Stack (k=3), Double DQN, No MaxPool", True, (149, 165, 166))
+    s_img = font_sub.render("Architecture: 30-Channel Spatial Encoder, Dueling Double DQN, MaxPool2d(2)", True, (149, 165, 166))
     surf.blit(t_img, (70, 15))
     surf.blit(s_img, (600, 20))
 

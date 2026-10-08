@@ -277,7 +277,10 @@ class SystemOneAgent:
 
         calc_time = (time.perf_counter() - t0) * 1000.0
         if self.simulate_latency:
-            latency = max(calc_time, SIMULATED_LATENCY_BASE_MS + (hash(tuple(pacman_pos)) % 16))
+            # Deterministic per-position jitter: hash() is process-salted (PYTHONHASHSEED)
+            # and would make "simulated" latencies differ across identical seeded runs.
+            jitter = (pacman_pos[0] * 31 + pacman_pos[1] * 17) % 16
+            latency = max(calc_time, SIMULATED_LATENCY_BASE_MS + jitter)
         else:
             latency = calc_time
 

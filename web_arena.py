@@ -13,6 +13,7 @@ import json
 import os
 import socketserver
 import sys
+import threading
 import webbrowser
 from typing import Optional
 
@@ -20,7 +21,7 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 from agents.registry import build_controllers
 from agents.dqn_agent import DQNAgent
-from core.environment import SCORE_DEATH, SCORE_PELLET, SCORE_WIN, Environment
+from core.environment import DEFAULT_MAX_STEPS, SCORE_DEATH, SCORE_PELLET, SCORE_WIN, Environment
 from core.maze_data import WALL_CELLS
 from llm.decision_client import SystemOneAgent
 
@@ -72,6 +73,9 @@ class GameSession:
             res = agent.decide(
                 *args, mode_step=self.env.mode_step, ghost_dirs=self.env.ghost_dirs,
                 steps_without_pellet=self.env.steps_without_pellet,
+                # Open-ended session: keep the horizon plane at "full episode ahead"
+                # instead of letting it count down to 0 (never seen in training).
+                steps_remaining=DEFAULT_MAX_STEPS, horizon=DEFAULT_MAX_STEPS,
             )
         else:
             res = agent.decide(*args)
@@ -108,15 +112,14 @@ class GameSession:
             "latency_simulated": res.latency_simulated,
             "probabilities": res.probabilities,
         }
-        return self.get_state()
+        return self.get_state(include_walls=False)
 
-    def get_state(self):
+    def get_state(self, include_walls: bool = True):
         c = self.controllers[self.active_idx]
-        return {
+        state = {
             "pacman": list(self.env.pacman_pos),
             "ghosts": [list(g) for g in self.env.ghost_positions],
             "pellets": [list(p) for p in self.env.pellets],
-            "walls": [list(w) for w in WALL_CELLS],
             "pellets_left": len(self.env.pellets),
             "score": self.score,
             "moves": self.moves,
@@ -127,9 +130,21 @@ class GameSession:
             "decision": self.last_decision,
             "agent_info": {"name": c["name"], "badge": c["badge"], "sub": c["sub"]},
         }
+        if include_walls:
+            # Static: the client fetches them once via GET /api/state instead of on every step
+            state["walls"] = [list(w) for w in WALL_CELLS]
+        return state
 
 
 session: Optional[GameSession] = None
+# Serializes all access to the shared session: the server is thread-per-request.
+session_lock = threading.Lock()
+
+
+class ArenaHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
+    """Thread-per-request server: a slow live System 1 call must not freeze the UI."""
+    daemon_threads = True
+    allow_reuse_address = True
 
 
 class ArenaHandler(http.server.BaseHTTPRequestHandler):
@@ -151,23 +166,31 @@ class ArenaHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
         elif self.path == "/api/state":
-            self._send_json(session.get_state())
+            with session_lock:
+                state = session.get_state()
+            self._send_json(state)
         else:
             self._send_json({"error": "not found"}, 404)
 
     def do_POST(self):
         try:
             if self.path == "/api/step":
-                self._send_json(session.step())
+                with session_lock:
+                    state = session.step()
+                self._send_json(state)
             elif self.path == "/api/switch_agent":
                 length = int(self.headers.get("Content-Length", 0) or 0)
                 if length > MAX_BODY_BYTES:
                     self._send_json({"error": "body too large"}, 413)
                     return
                 body = json.loads(self.rfile.read(length) or b"{}")
-                self._send_json(session.switch(int(body.get("index", 1))))
+                index = int(body.get("index", 1))
+                with session_lock:
+                    info = session.switch(index)
+                self._send_json(info)
             elif self.path == "/api/reset":
-                session.reset()
+                with session_lock:
+                    session.reset()
                 self._send_json({"status": "ok"})
             else:
                 self._send_json({"error": "not found"}, 404)
@@ -205,8 +228,7 @@ def main():
     if not args.no_browser:
         webbrowser.open(url)
 
-    socketserver.TCPServer.allow_reuse_address = True
-    with socketserver.TCPServer((args.bind, args.port), ArenaHandler) as httpd:
+    with ArenaHTTPServer((args.bind, args.port), ArenaHandler) as httpd:
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:

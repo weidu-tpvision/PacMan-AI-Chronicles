@@ -30,7 +30,6 @@ PACMAN_HEADING_CHANNELS = 4
 GHOST_HEADING_CHANNELS = 4 * GHOST_SLOTS
 SCALAR_CHANNELS = 4  # scatter flag, cycle phase, stall progress, horizon remaining
 NUM_CHANNELS = BASE_CHANNELS + GHOST_POSITION_CHANNELS + PACMAN_HEADING_CHANNELS + GHOST_HEADING_CHANNELS + SCALAR_CHANNELS
-FRAME_STACK_SIZE = NUM_CHANNELS  # Backwards-compatibility alias
 
 # Precompute static walls mask (Channel 0)
 WALL_MAP = np.zeros((GRID_HEIGHT, GRID_WIDTH), dtype=np.float32)

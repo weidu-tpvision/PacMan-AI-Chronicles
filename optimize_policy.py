@@ -1,14 +1,9 @@
 """
 Root runner / compatibility facade for Direct Policy Search.
-The full implementation is located in `rl.optimize_policy`.
+The full implementation (and CLI) lives in `rl.optimize_policy`; CLI args pass through.
 """
 
-import argparse
-from rl.optimize_policy import optimize_policy
+import runpy
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Optimize Pac-Man Policy via Cross-Entropy Method")
-    parser.add_argument("--generations", type=int, default=35, help="Number of generations")
-    args = parser.parse_args()
-
-    optimize_policy(generations=args.generations)
+    runpy.run_module("rl.optimize_policy", run_name="__main__")

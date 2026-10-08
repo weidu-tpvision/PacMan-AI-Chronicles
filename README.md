@@ -16,9 +16,9 @@ What happens when you pit modern **Generative AI (Large Language Models)** again
 
 > [!NOTE]
 > ### 🚧 Work in Progress & DQN Continuation Notice
-> This project is under active research and development. In particular, the **Deep Q-Network (DQN)** subsystem is in its Phase 1 checkpoint and **actively being continued**. 
+> This project is under active research and development. In particular, the **Deep Q-Network (DQN)** subsystem is **actively being continued**.
 >
-> While our feature-optimized RL agent currently holds the top tournament score (926.2 pts), it relies on human-engineered topological features (graph BFS, junction detection, dead-end depth). In contrast, **DQN learns its entire representation and policy end-to-end directly from raw spatial grid tensors without human inductive bias**. Because it is unconstrained by human feature ceilings, an extended DQN policy is theoretically destined to become the definitive arena champion. See the [DQN Research Roadmap](#-ongoing-research--dqn-roadmap) below.
+> The feature-optimized RL agents rely on human-engineered topological features (graph BFS, junction detection, dead-end depth). In contrast, **DQN learns its entire representation and policy end-to-end directly from raw spatial grid tensors without human inductive bias**. Because it is unconstrained by human feature ceilings, an extended DQN policy has the highest theoretical ceiling in the arena. See the [DQN Research Roadmap](#-ongoing-research--dqn-roadmap) below.
 
 ```text
 
@@ -27,46 +27,48 @@ What happens when you pit modern **Generative AI (Large Language Models)** again
 │ Expert Rules │ ──> │ Classical RL │ ──> │ Policy Optim (ES) │ ──> │    Deep RL (DQN)    │ ──> │   System 1 LLM  │
 │ (Greedy BFS) │     │ (Linear TD)  │     │   (CEM Search)    │     │  (PyTorch ConvNet)  │     │  (Transformer)  │
 └──────────────┘     └──────────────┘     └───────────────────┘     └─────────────────────┘     └─────────────────┘
-    0.02 ms               0.01 ms                0.03 ms                    0.27 ms                   93.0 ms
-    860 pts               610 pts                926 pts                    570 pts                   360 pts
+   µs-scale            µs-scale              µs-scale                   sub-ms, CPU-only         ~100 ms / decision
 ```
 
 ---
 
 ## 🥊 The Contenders
 
-| Hotkey | Agent Name | Paradigm | Technical Implementation | Inference Latency |
+| Hotkey | Agent Name | Paradigm | Technical Implementation | Latency Class |
 | :-: | :--- | :--- | :--- | :-: |
-| **[1]** | **Policy-Optimized RL** | *Evolutionary / Policy Search* | Cross-Entropy Method optimizing topological graph features (Junctions, traps, BFS). | `0.03 ms` |
-| **[2]** | **Deep Q-Network (DQN)** | *Deep Reinforcement Learning* | Identity-preserving spatial state with motion, mode, stall, and horizon features $\rightarrow$ ConvNet $\rightarrow$ Double-DQN. | `0.26 ms` |
-| **[3]** | **System 1 (LLM)** | *Foundation Model Zero-Shot* | Structured JSON / spatial reasoning via Ollama `POST /v1/systemone`. | `93.4 ms` |
-| **[4]** | **Greedy Heuristic** | *Symbolic / Expert Rules* | Hand-crafted priority rules balancing BFS food seeking and ghost evasion. | `0.02 ms` |
-| **[5]** | **Textbook Q-Learning** | *Classical TD-Learning* | Bellman equation updates on classic linear feature approximations. | `0.01 ms` |
-| **[6]** | **Random Baseline** | *Empirical Floor* | Uniform random distribution across legal corridors. | `0.00 ms` |
+| **[1]** | **Policy-Optimized RL** | *Evolutionary / Policy Search* | Cross-Entropy Method optimizing topological graph features (Junctions, traps, BFS). | µs-scale |
+| **[2]** | **Deep Q-Network (DQN)** | *Deep Reinforcement Learning* | Identity-preserving spatial state with motion, mode, stall, and horizon features $\rightarrow$ ConvNet $\rightarrow$ Dueling Double-DQN. | sub-ms, CPU-only |
+| **[3]** | **System 1 (LLM)** | *Foundation Model Zero-Shot* | Structured JSON / spatial reasoning via Ollama `POST /v1/systemone`. | ~100 ms live round-trip |
+| **[4]** | **Greedy Heuristic** | *Symbolic / Expert Rules* | Hand-crafted priority rules balancing BFS food seeking and ghost evasion. | µs-scale |
+| **[5]** | **Textbook Q-Learning** | *Classical TD-Learning* | Bellman equation updates on classic linear feature approximations. | µs-scale |
+| **[6]** | **Random Baseline** | *Empirical Floor* | Uniform random distribution across legal corridors. | ~zero |
 
 ---
 
-## 📊 Empirical Tournament Results (1,000 Identical Seeds)
+## 📊 Tournament Benchmark
 
-All agents competed on the identical 19×21 maze layout across 1,000 deterministic seeded runs (max 150 moves per episode):
+All agents compete on the identical 19×21 maze across deterministic seeded **TEST** episodes (`core/seeds.py`, disjoint from the TRAIN/VAL ranges used for training and model selection).
 
-```text
-==========================================================================================
- Agent Name                         | Avg Score  | Avg Moves  | Pellets  | Blunder %  | Latency  
-------------------------------------------------------------------------------------------
- Random Agent (Baseline)            |    -130.7  |      17.3  |     6.9  |      8.4%  |  0.00 ms 
- Greedy Heuristic                   |     570.0  |     111.0  |    77.0  |      0.0%  |  0.01 ms 
- Q-Learning (Textbook Baseline)     |     813.8  |     147.7  |   100.7  |      0.0%  |  0.01 ms 
- Deep Q-Network (PyTorch DQN)       |     570.0  |     120.0  |    57.0  |      0.0%  |  0.27 ms 
- RL (Policy Optimized)              |     926.2  |     197.2  |   111.2  |      0.0%  |  0.03 ms 
- System 1 [Heuristic Simulator]     |     360.0  |      73.0  |    56.0  |      0.0%  |  93.4 ms 
-==========================================================================================
+> [!IMPORTANT]
+> **Headline scores are intentionally not hardcoded in this README.** The engine, policies, and episode horizon are still evolving, so any number pasted here would silently drift out of sync with the code. The single source of truth is the generated artifact:
+> **[`results/tournament_results.json`](results/tournament_results.json)** — written by the runner below, and read back by both interactive arenas to render their score badges.
+
+Reproduce the full benchmark on your machine:
+
+```bash
+# 100 seeded TEST episodes at the canonical 300-move horizon (writes results/tournament_results.json)
+python compare_baselines.py --episodes 100
+
+# 1,000-episode run for tighter 95% confidence intervals
+python compare_baselines.py --episodes 1000
 ```
 
-### Key Takeaways:
-1. **The Latency Divide ($9,000\times$ Gap):** The Policy-Optimized RL agent makes decisions in **0.03 ms**, while the LLM takes **93.4 ms**. For fast real-time games, running a billion-parameter transformer per frame is radically inefficient.
-2. **Topological Feature Advantage:** The Policy-Optimized RL agent achieved a score of **926.2** (+356.2 over Greedy Heuristics) by learning multi-exit junctions and dead-end trap evasion.
-3. **End-to-End Visual Learning:** The Deep Q-Network learned spatial navigation from scratch in 12 minutes on CPU, achieving **570.0 pts** at 0.27 ms without any human feature engineering.
+The report includes, per agent: mean score ±95% CI, mean moves/pellets, survival and win rates, blunder rate, illegal-move and error counts, and decision latency (System 1 latencies from the offline simulator are flagged as synthetic).
+
+### What to look for in the numbers:
+1. **The Latency Divide:** learned/heuristic policies decide in microseconds-to-sub-millisecond on CPU, while a live LLM round-trip costs ~100 ms per move — roughly three orders of magnitude slower. For real-time games, a billion-parameter transformer per frame is radically inefficient.
+2. **Topological Feature Advantage:** CEM policy search over graph features (dead-end traps, safe junctions, BFS distances) exploits human domain knowledge that the Greedy heuristic uses only partially — compare their mean scores.
+3. **End-to-End Visual Learning:** the DQN learns corridor navigation from raw spatial tensors with zero feature engineering; watch whether extended training closes the gap to the feature-based agents (see roadmap below).
 
 ---
 
@@ -78,16 +80,16 @@ In classical reinforcement learning, policy search methods (such as the Cross-En
 **The Deep Q-Network (DQN) operates on a fundamentally purer principle:**
 - **Spatial State Learning:** It receives symbolic maze maps with separate actor identities, motion, and environment-state features.
 - **Autonomous Representation Learning:** The convolutional filters learn their own spatial kernels for corridor recognition, proximity gradients, and escape pathways directly from Bellman temporal difference errors.
-- **Unbounded Potential:** In our initial Phase 1 training run (1,200 episodes, ~12 minutes on CPU), DQN already reached **570.0 points** and **0.27 ms inference**. Because its representation capacity is vast and unconstrained by linear assumptions, extended training is expected to surpass all handcrafted heuristics.
+- **Unbounded Potential:** Because its representation capacity is vast and unconstrained by linear assumptions, extended training is expected to surpass handcrafted heuristics. Current progress is tracked in the training artifacts (`rl/weights/dqn_training_metrics.json`, `dqn_training_figures.svg`), not in this README.
 
 ### Phase 2 DQN Roadmap
-- [x] **Markov-Oriented State Encoding**: Separate current/history maps for each ghost, Pac-Man and ghost headings, scatter/chase phase, stall progress, and remaining episode horizon.
-- [x] **Global Receptive Field Pooling & Momentum Shaping**: 10×10 pooling for global pellet perception, anti-stall loop cutoff, directional momentum preservation, and inference anti-orbit dynamic memory.
+- [x] **Markov-Oriented State Encoding**: Separate current/history maps for each ghost, Pac-Man and ghost headings, scatter/chase phase, stall progress, and remaining episode horizon (30-channel encoder, see `dqn.md`).
+- [x] **Global Receptive Field Pooling & Momentum Shaping**: MaxPool for global pellet perception, anti-stall loop cutoff, directional momentum preservation, and inference anti-orbit dynamic memory.
 - [x] **Standardized Simulation Engine & Authentic Arcade Dynamics**: Unified single simulation engine (`core.environment.Environment`) across desktop Pygame, web arena, training, and tournaments with authentic 28/7 Chase/Scatter cycling and seeded RNG.
-- [x] **Automated Training Diagnostics**: Real-time metrics logging and 4-panel visual figure generation (vector SVG and raster PNG).
+- [x] **Automated Training Diagnostics**: Per-episode metrics logging (JSON/CSV) and 4-panel visual figure generation (vector SVG and raster PNG).
 - [x] **Prioritized Experience Replay (PER)**: Replay transitions by TD-error priority with annealed importance-sampling correction.
 - [x] **Dueling DQN Architecture**: Separate state value $V(s)$ and action advantages $A(s, a)$; inference remains compatible with legacy checkpoints.
-- [x] **Extended Training Run**: Completed 5,000 episodes with cosine learning-rate scheduling; best validation mean was **1,018.0** at episode **4,900** across the fixed 20-seed validation set.
+- [ ] **Extended Training Run**: Longer runs with cosine learning-rate scheduling; compare best-checkpoint validation means against the feature-based agents on identical seeds before updating the shipped checkpoint.
 
 ---
 
@@ -173,7 +175,7 @@ PacMan-AI-Chronicles/
 │   ├── train_q_learning.py      # Approximate TD Q-learning trainer
 │   ├── optimize_policy.py       # Direct policy search (Cross-Entropy Method / ES)
 │   └── weights/                 # Checkpoints, learned weights & diagnostics
-│       ├── dqn_pacman.pt        # Trained PyTorch CNN checkpoint (Peak val: 440.0)
+│       ├── dqn_pacman.pt        # Latest best-validation DQN checkpoint (see metrics JSON)
 │       ├── dqn_training.log     # Detailed milestone training telemetry log
 │       ├── dqn_training_metrics.json # Per-episode training metrics (JSON)
 │       ├── dqn_training_metrics.csv  # Per-episode training metrics (CSV)
@@ -185,6 +187,9 @@ PacMan-AI-Chronicles/
 ├── agents/                      # Decoupled Agent Implementations
 │   ├── __init__.py              # Unified agent registry
 │   ├── base.py                  # DecisionResult, AgentProtocol, softmax utilities
+│   ├── features.py              # Shared linear-feature extractors (train/inference parity)
+│   ├── paths.py                 # Checkpoint / weight path resolution
+│   ├── registry.py              # Controller registry shared by both arenas
 │   ├── random_agent.py          # Uniform random baseline agent
 │   ├── greedy_agent.py          # Multi-objective heuristic planner
 │   ├── q_learning_agent.py      # Linear feature Q-learning agents
@@ -194,7 +199,8 @@ PacMan-AI-Chronicles/
 ├── core/                        # Core Game Engine & Simulation
 │   ├── __init__.py              # Core exports
 │   ├── maze_data.py             # ASCII grid, dimensions, graph BFS analytics
-│   └── environment.py           # Standardized headless Pac-Man environment simulator
+│   ├── environment.py           # Standardized headless Pac-Man environment simulator
+│   └── seeds.py                 # Disjoint TRAIN / VAL / TEST seed ranges & global seeding
 │
 ├── llm/                         # System 1 / Ollama Client Subsystem
 │   ├── __init__.py              # LLM client exports
@@ -203,7 +209,8 @@ PacMan-AI-Chronicles/
 │
 ├── tests/                       # Automated Test Suite
 │   ├── test_agents.py           # Multi-agent decision verification test
-│   └── test_system_one.py       # Ollama schema & response verification test
+│   ├── test_system_one.py       # Ollama schema & response verification test
+│   └── test_review_regressions.py # Regression coverage for prior code-review fixes
 │
 ├── pacman_game.py               # Interactive Pygame visualizer and arena
 ├── compare_baselines.py         # Head-to-Head tournament runner

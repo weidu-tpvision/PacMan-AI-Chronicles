@@ -44,10 +44,11 @@ def run_episode(agent, seed: int, max_moves: int = DEFAULT_MAX_STEPS) -> Dict:
     if hasattr(agent, "reset"):
         agent.reset()
     env = Environment(seed=seed)
-    moves_count = pellets_eaten = blunders = errors = invalid_actions = 0
+    moves_count = pellets_eaten = blunders = errors = invalid_actions = substituted = 0
     collided = won = False
     latencies: List[float] = []
     simulated = False
+    live_decisions = 0
 
     for _ in range(max_moves):
         legal = env.get_legal_moves(*env.pacman_pos)
@@ -67,6 +68,7 @@ def run_episode(agent, seed: int, max_moves: int = DEFAULT_MAX_STEPS) -> Dict:
             res = agent.decide(pac, ghosts, env.pellets, legal, env.last_move)
         latencies.append(res.latency_ms)
         simulated = simulated or res.latency_simulated
+        live_decisions += int(res.is_live)
         if res.error_msg:
             errors += 1
 
@@ -82,6 +84,7 @@ def run_episode(agent, seed: int, max_moves: int = DEFAULT_MAX_STEPS) -> Dict:
             # Unknown values have no direction vector, so use a stable legal fallback.
             if not isinstance(move, str) or move not in DIRECTIONS:
                 move = legal[0] if legal else "left"
+                substituted += 1
 
         moves_count += 1
         collided, ate, won = env.step(move)
@@ -99,11 +102,14 @@ def run_episode(agent, seed: int, max_moves: int = DEFAULT_MAX_STEPS) -> Dict:
         "won": won,
         "survived": not collided,
         "blunder_rate": (blunders / moves_count * 100.0) if moves_count else 0.0,
-        "illegal_moves": env.illegal_moves + invalid_actions,
+        # Blocked known directions are already counted by the environment; only the
+        # substituted unknown choices never reach it.
+        "illegal_moves": env.illegal_moves + substituted,
         "invalid_actions": invalid_actions,
         "errors": errors,
         "avg_latency": statistics.mean(latencies) if latencies else 0.0,
         "latency_simulated": simulated,
+        "live_rate": (live_decisions / moves_count * 100.0) if moves_count else 0.0,
     }
 
 
@@ -111,9 +117,30 @@ def _ci95(values: List[float]) -> float:
     return 1.96 * statistics.stdev(values) / math.sqrt(len(values)) if len(values) > 1 else 0.0
 
 
+def probe_live_endpoint(backend: SystemOneAgent) -> bool:
+    """True only if the System 1 endpoint itself answers a real decision request.
+
+    `is_ollama_online()` checks Ollama's /api/version, which a stock Ollama install
+    answers even though /v1/systemone does not exist (every move would then silently
+    fall back to the offline simulator while being labelled "Live").
+    """
+    if not backend.is_ollama_online(force_refresh=True):
+        return False
+    env = Environment()
+    legal = env.get_legal_moves(*env.pacman_pos)
+    res = backend.decide_move(
+        tuple(env.pacman_pos), [tuple(g) for g in env.ghost_positions], env.pellets, legal, env.last_move
+    )
+    backend.reset()
+    return res.is_live
+
+
 def build_agents(model: str, host: str, sys1_live: bool):
     sys1_backend = SystemOneAgent(model=model, host=host, prefer_live=sys1_live)
-    is_live = sys1_live and sys1_backend.is_ollama_online(force_refresh=True)
+    is_live = sys1_live and probe_live_endpoint(sys1_backend)
+    if sys1_live and not is_live:
+        print(f"[WARN] System 1 endpoint {sys1_backend.api_url} did not answer; using the offline simulator.")
+        sys1_backend.prefer_live = False
     mode_label = f"Live {model}" if is_live else "Simulator"
     return [
         RandomAgent("Random Agent (Baseline)"),
@@ -175,6 +202,7 @@ def run_tournament(
             "errors": sum(s["errors"] for s in ep),
             "latency": statistics.mean(s["avg_latency"] for s in ep),
             "latency_simulated": any(s["latency_simulated"] for s in ep),
+            "live_rate": statistics.mean(s["live_rate"] for s in ep),
         }
         summary.append(row)
         any_simulated = any_simulated or row["latency_simulated"]
@@ -191,6 +219,9 @@ def run_tournament(
     print("=" * width)
     if any_simulated:
         print(" * Synthetic latency from the offline System 1 simulator (not a measured model round-trip).")
+    for row in summary:
+        if 0.0 < row["live_rate"] < 100.0:
+            print(f" ! {row['name']}: only {row['live_rate']:.1f}% of decisions were live; the rest fell back to the simulator.")
 
     ranked = sorted(summary, key=lambda r: r["score"], reverse=True)
     print("\nRANKING:")

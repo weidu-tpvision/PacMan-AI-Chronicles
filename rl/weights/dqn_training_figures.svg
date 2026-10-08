@@ -9,7 +9,7 @@
   .legend { font-size: 11px; font-weight: 500; }
 </style>
 <text x="70" y="35" class="title">Deep Q-Network (DQN) Pac-Man Training Diagnostics</text>
-<text x="650" y="35" class="subtitle">Architecture: 3-Frame Visual Stack (k=3), Double DQN, No MaxPool</text>
+<text x="650" y="35" class="subtitle">Architecture: 30-Channel Spatial Encoder, Dueling Double DQN, MaxPool2d(2)</text>
 <rect x="70" y="60" width="450" height="270" fill="#161f2e" rx="8" stroke="#253347" stroke-width="1"/>
 <text x="85" y="82" class="panel-title">Training Loss (Huber Loss)</text>
 <line x1="115" y1="295" x2="500" y2="295" class="axis"/>

@@ -31,6 +31,13 @@ def load_tournament_scores(path: str = RESULTS_PATH) -> Dict[str, float]:
         return {}
 
 
+def _uses_trained_weights(agent) -> bool:
+    """False when an agent fell back to untrained / built-in default parameters."""
+    if hasattr(agent, "model_loaded"):
+        return agent.model_loaded
+    return getattr(agent, "weights_loaded", True)
+
+
 def _badge(label: str, result_name: Optional[str], scores: Dict[str, float]) -> str:
     if result_name and result_name in scores:
         return f"{label} ({scores[result_name]:.0f} pts)"
@@ -44,8 +51,8 @@ def build_controllers(sys1_backend, model: str) -> List[dict]:
         dict(id="rl_opt", name="RL (Policy Optimized)", label="Graph-Aware RL", result="RL (Policy Optimized, CEM)",
              sub="Cross-Entropy policy optimization on topological features",
              color=(168, 85, 247), type_label="POLICY Q-VALUES", agent=TrainedQLearningAgent()),
-        dict(id="dqn", name="Deep Q-Network (DQN)", label="6-Channel PyTorch CNN", result="DQN (+inference heuristics)",
-             sub="ConvNet on raw spatial grid tensors (+ inference anti-orbit heuristics)",
+        dict(id="dqn", name="Deep Q-Network (DQN)", label="PyTorch CNN (30-ch encoder)", result="DQN (+inference heuristics)",
+             sub="Dueling Double-DQN on raw spatial grid tensors (+ inference anti-orbit heuristics)",
              color=(236, 72, 153), type_label="DEEP Q-VALUES", agent=DQNAgent(heuristics=True)),
         dict(id="sys1", name=f"System 1 ({model})", label="Neural Zero-Shot", result=None,
              sub="Spatial prompt reasoning via structured JSON logits",
@@ -62,6 +69,12 @@ def build_controllers(sys1_backend, model: str) -> List[dict]:
     ]
     controllers = []
     for s in specs:
-        s["badge"] = _badge(s.pop("label"), s.pop("result"), scores)
+        label, result = s.pop("label"), s.pop("result")
+        if _uses_trained_weights(s["agent"]):
+            s["badge"] = _badge(label, result, scores)
+        else:
+            # The tournament score belongs to the trained weights, not this fallback policy.
+            s["name"] = f"{s['name']} [UNTRAINED]"
+            s["badge"] = f"{label} (weights missing)"
         controllers.append(s)
     return controllers
