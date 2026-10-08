@@ -27,7 +27,7 @@ from core.seeds import seed_everything, train_seed
 
 DEFAULT_SAVE_PATH = os.path.join(os.path.dirname(__file__), "weights", "learned_q_weights.json")
 
-# Reward shaping (trainer-local: matches the DQN trainer except R_WIN, intentionally 250 vs 300)
+# Reward shaping (trainer-local; independent of the DQN trainer's score-aligned reward)
 R_STEP = -0.5
 R_PELLET = 15.0
 R_DEATH = -150.0

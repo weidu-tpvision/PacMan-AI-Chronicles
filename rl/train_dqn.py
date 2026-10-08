@@ -2,12 +2,13 @@
 Training pipeline for Deep Q-Network (DQN) and Double-DQN on Pac-Man.
 Implements:
 - Identity-preserving state encoding with motion, mode, stall, and horizon features
-- Global 10x10 receptive field via MaxPool2d(2)
-- Experience Replay Buffer (breaks temporal correlation)
-- Target Network (Double DQN to prevent Q-value overestimation)
+- Full-resolution convolution stack (no pooling) with dueling heads (see dqn.md)
+- Prioritized Experience Replay with importance-sampling correction
+- Target Network (Double DQN to prevent Q-value overestimation), legal-action masks
 - Smooth L1 (Huber) Loss and Adam optimization
 - Decaying epsilon-greedy exploration
-- Momentum-preserving reward shaping (reversal penalty) and anti-stall truncation
+- Reward = tournament score delta x REWARD_SCALE, plus small reversal and per-step
+  stall penalties; stalls are penalized, not truncated (same episodes as evaluation)
 - Fully seeded runs with disjoint TRAIN / VAL seed ranges (core.seeds)
 - Model checkpointing to rl/weights/dqn_pacman.pt (selected on the *pure greedy* policy)
 - Resumable training: a full training-state checkpoint (networks, optimizer, LR schedule,
@@ -43,20 +44,19 @@ except ImportError:
 from core.environment import DEFAULT_MAX_STEPS, SCORE_DEATH, SCORE_PELLET, SCORE_WIN, Environment
 from core.maze_data import OPPOSITE_DIRECTIONS
 from core.seeds import seed_everything, train_seed, val_seeds
-from rl.dqn_model import ACTION_TO_IDX, NUM_CHANNELS, PacmanDQN, encode_state
+from rl.dqn_model import ACTION_TO_IDX, ARCHITECTURES, NUM_CHANNELS, STALL_STEPS, PacmanDQN, encode_state
 
 DEFAULT_WEIGHTS_DIR = os.path.join(os.path.dirname(__file__), "weights")
 DEFAULT_MODEL_PATH = os.path.join(DEFAULT_WEIGHTS_DIR, "dqn_pacman.pt")
 TRAINING_STATE_NAME = "dqn_training_state.pt"
-TRAINING_STATE_VERSION = 1
+TRAINING_STATE_VERSION = 2  # v2: arch in config, score-aligned reward, no stall cutoff
 
-# Reward shaping constants
-R_STEP = -0.5
-R_PELLET = 15.0
-R_DEATH = -150.0
-R_WIN = 300.0
-R_REVERSAL = -1.5
-STALL_STEPS = 45
+# Reward: the evaluation score (SCORE_* in core.environment) scaled to a small range,
+# so the agent optimizes exactly what the tournament measures, plus two small shaping
+# terms (in the same scaled units, where a pellet is worth SCORE_PELLET * REWARD_SCALE).
+REWARD_SCALE = 0.1
+R_REVERSAL = -0.1        # reversing in a corridor while other moves exist
+R_STALL_PER_STEP = -0.05  # every step once STALL_STEPS steps passed without a pellet
 
 
 def compute_reward(
@@ -69,27 +69,25 @@ def compute_reward(
     steps_without_pellet: int,
 ) -> Tuple[float, bool]:
     """
-    Shaped reward for one transition.
+    Reward for one transition: scaled score delta plus shaping.
 
-    `prev_move` MUST be Pac-Man's heading *before* this step (read it before env.step()).
-    Returns (reward, stalled). A stall (STALL_STEPS consecutive steps without a pellet)
-    truncates the episode. The training loop records stall and time-limit cutoffs as
-    terminal in replay (no bootstrapping), matching the finite-episode scoring used by
-    validation and the tournament; the horizon channel in the observation keeps the
-    value semantics consistent at that boundary.
+    `prev_move` MUST be Pac-Man's heading *before* this step (read it before env.step()),
+    and `steps_without_pellet` the counter *after* it. Returns (reward, stalled), where
+    `stalled` means the stall penalty applied. Stalling never ends the episode: the
+    trainer ends episodes exactly where evaluation does (collision, board cleared, time
+    limit), and the stall plane in the observation keeps the penalty Markov.
     """
-    r = R_STEP
-    if ate:
-        r += R_PELLET
-    if collided:
-        r += R_DEATH
-    elif won:
-        r += R_WIN
+    score_delta = (
+        (SCORE_PELLET if ate else 0)
+        + (SCORE_DEATH if collided else 0)
+        + (SCORE_WIN if won and not collided else 0)
+    )
+    r = REWARD_SCALE * score_delta
     if prev_move and n_legal > 1 and move == OPPOSITE_DIRECTIONS.get(prev_move):
         r += R_REVERSAL
     stalled = steps_without_pellet >= STALL_STEPS and not collided and not won
     if stalled:
-        r -= 50.0
+        r += R_STALL_PER_STEP
     return r, stalled
 
 
@@ -292,7 +290,7 @@ def train_dqn(
     episodes: int = 1200,
     lr: float = 5e-4,
     batch_size: int = 64,
-    gamma: float = 0.95,
+    gamma: float = 0.99,
     epsilon_start: float = 1.0,
     epsilon_min: float = 0.05,
     epsilon_decay: float = 0.9975,
@@ -310,6 +308,7 @@ def train_dqn(
     checkpoint_path: Optional[str] = None,
     resume: bool = False,
     stop_after: Optional[int] = None,
+    arch: str = "deep",
 ):
     """Train (or resume training) the DQN.
 
@@ -340,6 +339,7 @@ def train_dqn(
         per_beta_start, target_update_steps = cfg["per_beta_start"], cfg["target_update_steps"]
         warmup_steps, max_steps, val_every, val_episodes = cfg["warmup_steps"], cfg["max_steps"], cfg["val_every"], cfg["val_episodes"]
         seed, save_path, buffer_capacity = cfg["seed"], cfg["save_path"], cfg["buffer_capacity"]
+        arch = cfg["arch"]
 
     config = {
         "episodes": episodes, "lr": lr, "batch_size": batch_size, "gamma": gamma,
@@ -347,6 +347,7 @@ def train_dqn(
         "per_beta_start": per_beta_start, "target_update_steps": target_update_steps,
         "warmup_steps": warmup_steps, "max_steps": max_steps, "val_every": val_every,
         "val_episodes": val_episodes, "seed": seed, "save_path": save_path, "buffer_capacity": buffer_capacity,
+        "arch": arch,
     }
 
     seed_everything(seed)
@@ -359,8 +360,8 @@ def train_dqn(
     csv_path = os.path.join(weights_dir, "dqn_training_metrics.csv")
 
     device = torch.device("cpu")
-    policy_net = PacmanDQN(in_channels=NUM_CHANNELS).to(device)
-    target_net = PacmanDQN(in_channels=NUM_CHANNELS).to(device)
+    policy_net = PacmanDQN(in_channels=NUM_CHANNELS, arch=arch).to(device)
+    target_net = PacmanDQN(in_channels=NUM_CHANNELS, arch=arch).to(device)
     target_net.load_state_dict(policy_net.state_dict())
     target_net.eval()
 
@@ -434,7 +435,7 @@ def train_dqn(
             log_print("======================================================================")
             log_print(f" DEEP Q-NETWORK (DQN) TRAINING: {NUM_CHANNELS}-Channel State Encoder")
             log_print("======================================================================")
-            log_print(f"Device: {device} | Batch Size: {batch_size} | Learning Rate: {lr} | Seed: {seed}")
+            log_print(f"Device: {device} | Arch: {arch} | Batch Size: {batch_size} | Learning Rate: {lr} | Gamma: {gamma} | Seed: {seed}")
             log_print(f"Episodes: {episodes} | Horizon: {max_steps} | Target Sync: every {target_update_steps} steps")
             log_print(f"Validation: {val_episodes} VAL seeds every {val_every} episodes (pure greedy policy)")
             log_print(f"Training state: {os.path.relpath(checkpoint_path)} every {checkpoint_every} episodes\n")
@@ -443,7 +444,6 @@ def train_dqn(
             # ---- Warm-up phase (uniform random policy) ----
             env = Environment(seed=train_seed(rng))
             prev_p = prev_g = None
-            no_pellet = 0
             for _ in range(warmup_steps):
                 legal = env.get_legal_moves(*env.pacman_pos)
                 curr_p = tuple(env.pacman_pos)
@@ -458,8 +458,7 @@ def train_dqn(
                 m = rng.choice(legal)
                 prev_move = env.last_move
                 col, ate, won = env.step(m)
-                no_pellet = 0 if ate else no_pellet + 1
-                r, stalled = compute_reward(prev_move, m, ate, col, won, len(legal), no_pellet)
+                r, _ = compute_reward(prev_move, m, ate, col, won, len(legal), env.steps_without_pellet)
 
                 ns = encode_state(
                     tuple(env.pacman_pos), [tuple(g) for g in env.ghost_positions], env.pellets, curr_p, curr_g,
@@ -471,13 +470,13 @@ def train_dqn(
                 next_mask = np.array([a in next_legal for a in ACTION_TO_IDX], dtype=np.bool_)
                 if not next_mask.any():
                     next_mask[:] = True
-                replay_buffer.push(s, ACTION_TO_IDX[m], r, ns, float(col or won or stalled or env.step_count >= max_steps), next_mask)
+                done = col or won or env.step_count >= max_steps
+                replay_buffer.push(s, ACTION_TO_IDX[m], r, ns, float(done), next_mask)
                 prev_p, prev_g = curr_p, curr_g
 
-                if col or won or stalled or env.step_count >= max_steps:
+                if done:
                     env = Environment(seed=train_seed(rng))
                     prev_p = prev_g = None
-                    no_pellet = 0
 
             log_print("Warm-up complete! Beginning DQN neural optimization...\n")
 
@@ -486,6 +485,9 @@ def train_dqn(
         try:
             for ep in range(start_episode, session_end):
                 env = Environment(seed=train_seed(rng))
+                # IS exponent annealed over the episode schedule (episodes rarely run to
+                # the horizon, so a step-based schedule would never reach beta = 1).
+                beta = min(1.0, per_beta_start + (1.0 - per_beta_start) * ep / max(1, episodes - 1))
                 ep_reward = 0.0
                 pellets_eaten = 0
                 collided = won = False
@@ -521,7 +523,7 @@ def train_dqn(
                         steps_without_pellet += 1
                     collided = col
 
-                    r, stalled = compute_reward(prev_move, m, ate, col, won, len(legal), steps_without_pellet)
+                    r, _ = compute_reward(prev_move, m, ate, col, won, len(legal), steps_without_pellet)
                     ep_reward += r
 
                     ns = encode_state(
@@ -530,7 +532,7 @@ def train_dqn(
                         steps_without_pellet=steps_without_pellet,
                         steps_remaining=max_steps - steps, horizon=max_steps,
                     )
-                    terminal = col or won or stalled or steps >= max_steps
+                    terminal = col or won or steps >= max_steps
                     next_legal = env.get_legal_moves(*env.pacman_pos)
                     next_mask = np.array([a in next_legal for a in ACTION_TO_IDX], dtype=np.bool_)
                     if not next_mask.any():
@@ -540,7 +542,6 @@ def train_dqn(
 
                     # Sample batch & optimize
                     if len(replay_buffer) >= batch_size:
-                        beta = min(1.0, per_beta_start + (1.0 - per_beta_start) * total_steps / max(1, episodes * max_steps))
                         b_s, b_a, b_r, b_ns, b_d, b_next_mask, indices, is_weights = replay_buffer.sample(batch_size, beta)
                         curr_q = policy_net(b_s).gather(1, b_a)
 
@@ -664,6 +665,8 @@ if __name__ == "__main__":
     parser.add_argument("--batch-size", type=int, default=None, help="Batch size (default 64)")
     parser.add_argument("--seed", type=int, default=None, help="Global RNG seed (default 0)")
     parser.add_argument("--save-path", type=str, default=None, help="Path to save best model weights")
+    parser.add_argument("--arch", choices=ARCHITECTURES, default=None,
+                        help="Network: 'deep' full-resolution conv stack (default) or legacy 'pool'")
     parser.add_argument("--resume", action="store_true", help="Continue from the training-state checkpoint")
     parser.add_argument("--checkpoint-path", type=str, default=None,
                         help=f"Training-state file (default: <save-path dir>/{TRAINING_STATE_NAME})")
@@ -674,7 +677,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     hyper = {"episodes": args.episodes, "lr": args.lr, "batch_size": args.batch_size,
-             "seed": args.seed, "save_path": args.save_path}
+             "seed": args.seed, "save_path": args.save_path, "arch": args.arch}
     passed = {k: v for k, v in hyper.items() if v is not None}
     if args.resume and passed:
         parser.error(f"--resume uses the checkpoint's hyperparameters; drop {', '.join('--' + k.replace('_', '-') for k in passed)}")

@@ -23,7 +23,7 @@ from core.maze_data import DIRECTIONS, GRID_WIDTH, OPPOSITE_DIRECTIONS
 
 try:
     import torch
-    from rl.dqn_model import ACTION_TO_IDX, NUM_CHANNELS, PacmanDQN, encode_state
+    from rl.dqn_model import ACTION_TO_IDX, NUM_CHANNELS, PacmanDQN, detect_architecture, encode_state
     TORCH_AVAILABLE = True
 except ImportError:  # pragma: no cover - exercised only on torch-less installs
     TORCH_AVAILABLE = False
@@ -82,8 +82,11 @@ class DQNAgent:
             self.device = torch.device("cpu")
             try:
                 state_dict = torch.load(self.model_path, map_location=self.device, weights_only=True)
-                # Preserve inference for checkpoints trained before the dueling head.
-                model = PacmanDQN(in_channels=NUM_CHANNELS, dueling="value_head.weight" in state_dict).to(self.device)
+                # Architecture (full-resolution "deep" vs legacy "pool") and dueling head are
+                # read from the parameter names, so every shipped checkpoint generation loads.
+                arch, dueling = detect_architecture(state_dict)
+                model = PacmanDQN(in_channels=NUM_CHANNELS, dueling=dueling, arch=arch).to(self.device)
+                self.arch = arch
                 first_weight = state_dict.get("conv.0.weight")
                 if first_weight is not None and first_weight.shape[1] == 6:
                     # Expand legacy merged-ghost channels into the new per-ghost planes.

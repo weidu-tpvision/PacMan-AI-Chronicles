@@ -107,16 +107,17 @@ Rather than compressing objects into a scalar matrix where negative values colli
 ### 2. Temporal Velocity Tracking & Inertia
 * By cross-correlating current/previous position pairs — Pac-Man $(2, 3)$ and ghosts $(4, 7)$, $(5, 8)$, $(6, 9)$ — 2D convolutional kernels can compute **velocity vectors $(\Delta x, \Delta y)$**; the heading planes (10–25) supply directions explicitly.
 * **Momentum Regulation**: Reversal penalties during training (`R_REVERSAL` in `rl/train_dqn.py`) and inference (`REVERSAL_PENALTY` in `agents/dqn_agent.py`) discourage micro-oscillations between adjacent empty corridor cells.
-* **Anti-Stall Cutoff**: During training, `STALL_STEPS` consecutive steps without a pellet end the episode with a penalty, so empty corridors cannot become infinite orbit havens.
+* **Stall Penalty**: Once `STALL_STEPS` steps pass without a pellet, every further step costs `R_STALL_PER_STEP`. Stalls are penalized, not truncated, so training episodes end exactly where evaluation episodes do.
+* **Score-Aligned Reward**: The reward is the tournament score delta scaled by `REWARD_SCALE` plus the small shaping terms above; see `dqn.md` for the rationale (including the long discount).
 * **Anti-Orbit Dynamic Memory**: A rolling position buffer (`recent_positions`) tracks repeated tile visits during inference. When no pellets have been eaten and a candidate move leads into repeatedly visited empty corridors, a penalty proportional to the visit count (`ORBIT_PENALTY_PER_VISIT`) is subtracted, allowing the agent to exit local corridor limit cycles without retraining.
 
-### 3. Global Receptive Field Neural Architecture (`PacmanDQN`)
+### 3. Full-Resolution Neural Architecture (`PacmanDQN`, `arch="deep"`)
 * **Input**: `(batch, 30, 21, 19)`
-* **Conv 1**: `Conv2d(30, 32, kernel=3, padding=1)` + ReLU (local entity & velocity detection)
-* **Conv 2**: `Conv2d(32, 64, kernel=3, padding=1)` + ReLU (corridor & intersection features)
-* **Pooling**: `MaxPool2d(kernel=2, stride=2)` ($21 \times 19 \to 10 \times 9$, expanding the receptive field so the agent perceives distant pellet clusters across the maze)
-* **Shared feature head**: `Linear(5760, 128)` + ReLU
-* **Dueling heads**: `Linear(128, 1)` for state value $V(s)$ and `Linear(128, 4)` for action advantages $A(s,a)$.
+* **Convolution stack**: `DEEP_CONV_LAYERS` x (`Conv2d(3x3, padding=1)` + ReLU) at full grid resolution, **no pooling** — exact tile offsets between actors are preserved while the receptive field grows by 2 tiles per layer.
+* **Channel reduction**: `Conv2d(1x1)` to `DEEP_REDUCED_CHANNELS` + ReLU, keeping the dense layer small.
+* **Shared feature head**: `Linear(DEEP_REDUCED_CHANNELS * 21 * 19, HIDDEN_UNITS)` + ReLU
+* **Dueling heads**: `Linear(HIDDEN_UNITS, 1)` for state value $V(s)$ and `Linear(HIDDEN_UNITS, 4)` for action advantages $A(s,a)$.
+* **Legacy `arch="pool"`**: the earlier two-conv + `MaxPool2d(2)` network, kept only so older checkpoints load; `DQNAgent` detects the architecture from parameter names.
 * **Aggregation**: $Q(s,a)=V(s)+A(s,a)-\operatorname{mean}_{a'}A(s,a')$, outputting Q-values for `[up, down, left, right]`.
 
 ### 4. Double DQN & Optimization

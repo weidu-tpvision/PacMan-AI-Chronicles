@@ -84,6 +84,19 @@ class TestTrainResume(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             train_dqn(resume=True, checkpoint_path=os.path.join(self.tmp, "missing.pt"))
 
+    def test_agent_loads_deep_and_legacy_checkpoints(self):
+        from agents.dqn_agent import DQNAgent
+        from rl.dqn_model import PacmanDQN
+        from rl.train_dqn import DEFAULT_MODEL_PATH
+
+        deep_path = os.path.join(self.tmp, "deep.pt")
+        torch.save(PacmanDQN(arch="deep").state_dict(), deep_path)
+        for path, arch in ((deep_path, "deep"), (DEFAULT_MODEL_PATH, "pool")):
+            agent = DQNAgent(model_path=path, require_weights=True)
+            self.assertEqual(agent.arch, arch)
+            res = agent.decide((9, 15), [(9, 7), (7, 7), (11, 7)], {(1, 1)}, ["left", "right"])
+            self.assertIn(res.choice, ["left", "right"])
+
     def test_replay_buffer_state_round_trip(self):
         import numpy as np
         from rl.train_dqn import ReplayBuffer

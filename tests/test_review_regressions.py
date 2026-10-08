@@ -79,14 +79,31 @@ class ImmediateAgent:
 
 class TestReviewRegressions(unittest.TestCase):
     @unittest.skipUnless(NUMPY_AVAILABLE, "NumPy is optional")
-    def test_stall_cutoff_applies_penalty(self):
+    def test_stall_is_a_per_step_penalty(self):
+        from rl.train_dqn import R_STALL_PER_STEP
+
         reward, stalled = compute_reward(None, "left", False, False, False, 2, STALL_STEPS - 1)
         self.assertFalse(stalled)
-        self.assertEqual(reward, -0.5)
+        self.assertEqual(reward, 0.0)
 
-        reward, stalled = compute_reward(None, "left", False, False, False, 2, STALL_STEPS)
-        self.assertTrue(stalled)
-        self.assertEqual(reward, -50.5)
+        for steps in (STALL_STEPS, STALL_STEPS + 30):  # keeps applying, never saturates into a cutoff
+            reward, stalled = compute_reward(None, "left", False, False, False, 2, steps)
+            self.assertTrue(stalled)
+            self.assertAlmostEqual(reward, R_STALL_PER_STEP)
+
+    @unittest.skipUnless(NUMPY_AVAILABLE, "NumPy is optional")
+    def test_reward_is_proportional_to_tournament_score(self):
+        from core.environment import SCORE_DEATH, SCORE_PELLET, SCORE_WIN
+        from rl.train_dqn import REWARD_SCALE
+
+        def reward(**event):
+            args = dict(ate=False, collided=False, won=False)
+            args.update(event)
+            return compute_reward(None, "left", args["ate"], args["collided"], args["won"], 2, 0)[0]
+
+        self.assertAlmostEqual(reward(ate=True), REWARD_SCALE * SCORE_PELLET)
+        self.assertAlmostEqual(reward(collided=True), REWARD_SCALE * SCORE_DEATH)
+        self.assertAlmostEqual(reward(ate=True, won=True), REWARD_SCALE * (SCORE_PELLET + SCORE_WIN))
 
     @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch is optional")
     def test_replay_preserves_next_action_mask_and_masks_argmax(self):

@@ -31,6 +31,19 @@ GHOST_HEADING_CHANNELS = 4 * GHOST_SLOTS
 SCALAR_CHANNELS = 4  # scatter flag, cycle phase, stall progress, horizon remaining
 NUM_CHANNELS = BASE_CHANNELS + GHOST_POSITION_CHANNELS + PACMAN_HEADING_CHANNELS + GHOST_HEADING_CHANNELS + SCALAR_CHANNELS
 
+# Steps without a pellet after which the trainer applies its stall penalty; the stall
+# plane saturates here, which keeps that penalty a function of the observation.
+STALL_STEPS = 45
+
+# Full-resolution network ("deep"): DEEP_CONV_LAYERS x (3x3 conv, DEEP_CONV_WIDTH ch)
+# -> receptive field (2 * DEEP_CONV_LAYERS + 1) tiles, then a 1x1 reduction to
+# DEEP_REDUCED_CHANNELS before the dense layer.
+DEEP_CONV_LAYERS = 6
+DEEP_CONV_WIDTH = 32
+DEEP_REDUCED_CHANNELS = 16
+HIDDEN_UNITS = 128
+ARCHITECTURES = ("deep", "pool")
+
 # Precompute static walls mask (Channel 0)
 WALL_MAP = np.zeros((GRID_HEIGHT, GRID_WIDTH), dtype=np.float32)
 for x, y in WALL_CELLS:
@@ -102,7 +115,7 @@ def encode_state(
     mode_in_cycle = (next_mode_step - 1) % MODE_CYCLE
     state[cursor, :, :] = float(mode_in_cycle < SCATTER_STEPS)
     state[cursor + 1, :, :] = mode_in_cycle / max(1, MODE_CYCLE - 1)
-    state[cursor + 2, :, :] = min(max(steps_without_pellet, 0), 45) / 45.0
+    state[cursor + 2, :, :] = min(max(steps_without_pellet, 0), STALL_STEPS) / STALL_STEPS
     state[cursor + 3, :, :] = min(max(steps_remaining, 0), max(1, horizon)) / max(1, horizon)
 
     return state
@@ -117,45 +130,68 @@ def encode_frame(
     return encode_state(pacman_pos, ghost_positions, pellets)
 
 
+def detect_architecture(state_dict) -> Tuple[str, bool]:
+    """(arch, dueling) of a saved PacmanDQN state dict, from its parameter names."""
+    arch = "deep" if "trunk.0.weight" in state_dict else "pool"
+    return arch, "value_head.weight" in state_dict
+
+
 if TORCH_AVAILABLE:
     class PacmanDQN(nn.Module):
         """
         Deep Q-Network with identity-preserving spatial and state-context channels.
-        Uses MaxPool2d(2) to provide a 10x10 receptive field for global maze vision.
+
+        arch="deep" (default): a stack of 3x3 convolutions at full grid resolution (no
+        pooling, so exact tile offsets between actors survive), a 1x1 channel reduction,
+        one dense layer and dueling heads.
+        arch="pool": the earlier two-conv + MaxPool2d(2) network, kept so existing
+        checkpoints load (dueling=False reproduces the oldest single-head checkpoints).
         """
 
-        def __init__(self, in_channels: int = NUM_CHANNELS, num_actions: int = 4, dueling: bool = True):
+        def __init__(self, in_channels: int = NUM_CHANNELS, num_actions: int = 4, dueling: bool = True, arch: str = "deep"):
             super().__init__()
+            if arch not in ARCHITECTURES:
+                raise ValueError(f"Unknown architecture {arch!r}; expected one of {ARCHITECTURES}")
+            self.arch = arch
             self.dueling = dueling
 
-            self.conv = nn.Sequential(
-                nn.Conv2d(in_channels, 32, kernel_size=3, padding=1),
-                nn.ReLU(),
-                nn.Conv2d(32, 64, kernel_size=3, padding=1),
-                nn.ReLU(),
-                nn.MaxPool2d(kernel_size=2, stride=2),  # 21x19 -> 10x9
-            )
+            if arch == "deep":
+                layers, channels = [], in_channels
+                for _ in range(DEEP_CONV_LAYERS):
+                    layers += [nn.Conv2d(channels, DEEP_CONV_WIDTH, kernel_size=3, padding=1), nn.ReLU()]
+                    channels = DEEP_CONV_WIDTH
+                layers += [nn.Conv2d(channels, DEEP_REDUCED_CHANNELS, kernel_size=1), nn.ReLU()]
+                self.trunk = nn.Sequential(*layers)
+                flat_features = DEEP_REDUCED_CHANNELS * GRID_HEIGHT * GRID_WIDTH
+            else:
+                self.conv = nn.Sequential(
+                    nn.Conv2d(in_channels, 32, kernel_size=3, padding=1),
+                    nn.ReLU(),
+                    nn.Conv2d(32, 64, kernel_size=3, padding=1),
+                    nn.ReLU(),
+                    nn.MaxPool2d(kernel_size=2, stride=2),  # 21x19 -> 10x9
+                )
+                flat_features = 64 * (GRID_HEIGHT // 2) * (GRID_WIDTH // 2)
 
-            # 64 channels * 10 height * 9 width = 5,760 features
             if dueling:
                 self.feature_head = nn.Sequential(
                     nn.Flatten(),
-                    nn.Linear(64 * 10 * 9, 128),
+                    nn.Linear(flat_features, HIDDEN_UNITS),
                     nn.ReLU(),
                 )
-                self.value_head = nn.Linear(128, 1)
-                self.advantage_head = nn.Linear(128, num_actions)
+                self.value_head = nn.Linear(HIDDEN_UNITS, 1)
+                self.advantage_head = nn.Linear(HIDDEN_UNITS, num_actions)
             else:
                 # Retain the original module names and shapes so historical checkpoints load.
                 self.fc = nn.Sequential(
                     nn.Flatten(),
-                    nn.Linear(64 * 10 * 9, 128),
+                    nn.Linear(flat_features, HIDDEN_UNITS),
                     nn.ReLU(),
-                    nn.Linear(128, num_actions),
+                    nn.Linear(HIDDEN_UNITS, num_actions),
                 )
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
-            features = self.conv(x)
+            features = self.trunk(x) if self.arch == "deep" else self.conv(x)
             if not self.dueling:
                 return self.fc(features)
             features = self.feature_head(features)
