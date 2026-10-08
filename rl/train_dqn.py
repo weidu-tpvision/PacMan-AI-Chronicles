@@ -254,7 +254,7 @@ def train_dqn(
     best_val_score = -float("inf")
     best_val_episode = None
 
-    with open(log_path, "w", encoding="utf-8") as log_file:
+    with open(log_path, "w", encoding="utf-8", newline="\n") as log_file:
 
         def log_print(msg: str = ""):
             print(msg, flush=True)
@@ -451,12 +451,12 @@ def train_dqn(
         log_print("======================================================================")
 
     # Export metrics files
-    with open(json_path, "w", encoding="utf-8") as f:
+    with open(json_path, "w", encoding="utf-8", newline="\n") as f:
         json.dump(metrics_history, f, indent=2)
 
     if metrics_history:
         with open(csv_path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=list(metrics_history[0].keys()))
+            writer = csv.DictWriter(f, fieldnames=list(metrics_history[0].keys()), lineterminator="\n")
             writer.writeheader()
             writer.writerows(metrics_history)
 

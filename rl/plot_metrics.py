@@ -148,7 +148,7 @@ def generate_svg(metrics: List[Dict], output_svg_path: str):
 
     svg.append("</svg>")
 
-    with open(output_svg_path, "w", encoding="utf-8") as f:
+    with open(output_svg_path, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(svg))
 
 

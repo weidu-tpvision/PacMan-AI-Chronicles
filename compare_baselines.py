@@ -231,7 +231,7 @@ def run_tournament(
 
     if results_path:
         os.makedirs(os.path.dirname(results_path), exist_ok=True)
-        with open(results_path, "w", encoding="utf-8") as f:
+        with open(results_path, "w", encoding="utf-8", newline="\n") as f:
             json.dump(
                 {"episodes": episodes, "max_moves": max_moves, "seeds": [seeds[0], seeds[-1]],
                  "summary": summary, "per_episode": results},

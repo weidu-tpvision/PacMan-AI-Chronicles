@@ -129,7 +129,7 @@ def optimize_policy(
     log(f"Peak Validation Score (selection metric, optimistic): {best_global_score:.1f}")
 
     os.makedirs(os.path.dirname(os.path.abspath(save_path)), exist_ok=True)
-    with open(save_path, "w", encoding="utf-8") as f:
+    with open(save_path, "w", encoding="utf-8", newline="\n") as f:
         json.dump({k: round(v, 4) for k, v in best_global_weights.items()}, f, indent=2)
     log(f"\n[SUCCESS] Saved best weights to {save_path}")
 

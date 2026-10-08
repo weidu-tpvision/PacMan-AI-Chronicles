@@ -190,7 +190,7 @@ def train_q_learning(
     log(f"\nTraining completed in {time.perf_counter() - t_start:.2f} seconds.")
 
     os.makedirs(os.path.dirname(os.path.abspath(save_path)), exist_ok=True)
-    with open(save_path, "w", encoding="utf-8") as f:
+    with open(save_path, "w", encoding="utf-8", newline="\n") as f:
         json.dump({k: round(agent.weights[k], 4) for k in TEXTBOOK_FEATURES}, f, indent=2)
     log(f"[SUCCESS] Saved learned weights to {save_path}")
     return agent
