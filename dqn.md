@@ -1,98 +1,119 @@
-# DQN observation state: completeness plan
+# DQN design
 
-## Current representation
+Design notes for the Deep Q-Network agent: what it observes, how the network is shaped, what it is trained to optimize, and why. Values are referenced by their code constants (`rl/dqn_model.py`, `rl/train_dqn.py`); experiment results and run parameters are deliberately not recorded here.
 
-The DQN encoder in `rl/dqn_model.py` produces 30 spatial channels: walls, pellets, Pac-Man's current and previous positions, separate current and previous maps for each of three ghosts, four Pac-Man heading planes, twelve ghost heading planes, and four global planes for scatter mode, cycle phase, stall progress, and remaining horizon. This remains a symbolic grid observation rather than rendered-frame input.
+> **Status:** the shipped checkpoint (`rl/weights/dqn_pacman.pt`) was trained before the collision-rule fix, the objective change and the full-resolution network described below. It still loads (legacy architecture), but it must be retrained before its scores mean anything.
 
-## Separate object channels versus one merged map
+## 1. Observation
 
-There are two common ways to encode the object types on this grid.
+`encode_state()` produces a stack of 0/1 spatial maps plus a few normalized global planes on the `21 × 19` grid:
 
-### Separate binary channels
+| Channels | Content |
+| --- | --- |
+| 0 | Walls |
+| 1 | Remaining pellets |
+| 2–3 | Pac-Man now / previous position |
+| 4–9 | Each ghost now (4–6) / previous (7–9) — one map per ghost identity |
+| 10–13 | Pac-Man heading (one-hot) |
+| 14–25 | Ghost headings (one-hot per ghost, set at the ghost's tile) |
+| 26–29 | Scatter flag, Scatter/Chase cycle phase, stall progress (saturates at `STALL_STEPS`), remaining horizon |
 
-Give each object type its own 0/1 spatial map. For example, use a wall map, a pellet map, one Pac-Man map, and one map per ghost identity. Add history or heading features separately where needed.
+### Separate binary channels, not one categorical map
+For a small symbolic grid, one 0/1 map per object type is preferred over a single integer-coded map (`0=empty, 1=wall, 2=pellet, …`):
 
-**Advantages**
+- A CNN fed integer codes treats them as ordered magnitudes (category 6 "closer" to 5 than to 2), which is meaningless.
+- One label per cell cannot represent overlapping objects (e.g. at a collision) without a priority rule that hides information.
+- Per-ghost maps keep ghost identity, which matters because each ghost follows a different chase rule.
+- Sparse position maps are expected for single-tile entities and are not, by themselves, a reason to merge channels.
 
-- Object type is explicit; the network does not have to infer it from an arbitrary numeric code.
-- Binary values have no artificial ordering. A ghost label of `4` is not treated as “twice as much” as a pellet label of `2`.
-- Different objects can occupy the same cell without one overwriting the other.
-- Separate ghost maps retain ghost identity, which matters because the environment gives ghosts different behaviors.
-- Adding history is straightforward: provide separate time-indexed planes for the entities whose motion matters.
+### Markov completeness
+The encoder is built around the question "does this variable change future transitions or rewards?":
 
-**Tradeoffs**
+- **Encoded:** ghost positions and headings (ghosts may not reverse), Pac-Man position and heading (Pinky/Clyde targets use it), Scatter/Chase phase for the *next* ghost move, remaining pellets, stall progress (it drives the stall penalty), remaining horizon (the episode is finite).
+- **Not encoded, by design:**
+  - *Ghost RNG state* — junction jitter is exogenous noise; the agent should not model the generator.
+  - *Cumulative score* — affects neither dynamics nor reward.
+  - *Illegal-move count* — action selection is masked to legal moves.
+  - *Lives* — training episodes are single-life (a collision is terminal). If a multi-life objective is ever wanted, training and observation must change together.
 
-- The input has more channels, which increases the first convolution's parameter count and computation modestly.
-- Position maps for Pac-Man and ghosts are sparse. This is expected for entities that occupy only a few cells; sparsity alone does not make the representation poor.
-- Static walls and dynamic objects repeat across observations. This costs input bandwidth, though it is usually small for this maze.
+### Known redundancies (candidates for a later cleanup)
+- **Previous-position maps are mostly redundant with headings:** ghosts move every step, so previous = current − heading; Pac-Man's differ only after a blocked move, which the masked training policy never makes.
+- **Pac-Man heading is broadcast over the whole grid**, while ghost headings are placed at the ghost's tile; placing it at Pac-Man's tile would be consistent.
+- **The four global values are broadcast as full planes** and pass through every convolution; appending them to the dense-layer input would be cheaper and clearer.
 
-### One merged categorical map
+These are harmless but change the input format, so they are deferred to one combined encoding change (old checkpoints would no longer load).
 
-Encode each cell with one integer such as `0=empty`, `1=wall`, `2=pellet`, `3=Pac-Man`, and `4..6=ghost identity`.
+## 2. Network
 
-**Advantages**
+### Full-resolution convolution stack (default, `arch="deep"`)
+A stack of `3 × 3` convolutions with padding and **no pooling**, a `1 × 1` convolution that reduces channels before flattening, one dense layer, then dueling heads (`V(s)` and `A(s, a)`, combined as `Q = V + A − mean(A)`).
 
-- Uses one spatial plane and is compact to store.
-- Can be convenient for visualization or as input to a model designed for categorical tokens.
+Why no pooling: on a tile maze one tile is the difference between "ghost adjacent" and "ghost two steps away". The previous design pooled 2× right after a `5 × 5` receptive field, discarding exact relative positions before the network could use them, and left ~96% of the parameters in one dense layer that had to do all maze-wide reasoning. Stacking convolutions at full resolution grows the receptive field without losing tile precision; the `1 × 1` reduction keeps the dense layer small. The cost is compute (every layer sees all 399 tiles), so the stack is kept narrow.
 
-**Tradeoffs**
+### Legacy pooled network (`arch="pool"`)
+Two convolutions, `MaxPool2d(2)`, dense layer, dueling (or a single linear head for the oldest checkpoints). Kept only so existing checkpoints load; `DQNAgent` detects the architecture from the checkpoint's parameter names.
 
-- Feeding these integers directly to a standard CNN imposes arbitrary numeric distances and ordering between categories. The model may treat category 6 as more similar to 5 than to 2 for reasons unrelated to the game.
-- A single label per cell cannot represent overlapping objects unless an explicit priority or multi-label scheme is added. Priority can hide useful information, for example at a collision state.
-- Current object identity and temporal information still need a representation; merging does not solve state completeness.
-- A learned embedding for categories can avoid the numeric-order problem, but it adds model complexity and still needs a way to represent multiple simultaneous categories per cell.
+### Not chosen (yet): Pac-Man-centered view
+Re-centering the grid on Pac-Man (wrapping horizontally through the tunnel) aligns convolution features with the action outputs and is the common choice for grid games. It is a larger change (coordinate transform in encoder, agent and replay) and remains a candidate experiment once the full-resolution network has a baseline.
 
-### Recommendation
+## 3. Objective
 
-Prefer separate binary channels for this small symbolic grid. Keep static walls and remaining pellets separate, and give each ghost its own channel. The current concern about sparse Pac-Man and ghost maps is not, by itself, a reason to merge them. If reducing channels is important, compare alternatives empirically on identical seeds and training budgets; do not assume a single numeric label plane is equivalent.
+### Reward follows the evaluation score
+The training reward is the **tournament score delta scaled by `REWARD_SCALE`** (pellet, death and win use `SCORE_PELLET`, `SCORE_DEATH`, `SCORE_WIN` from `core.environment`) plus two small shaping terms:
 
-## Current DQN versus the Atari paper's DQN
+- `R_REVERSAL` — discourages reversing in a corridor when other moves exist (anti-oscillation).
+- `R_STALL_PER_STEP` — applied on every step once `STALL_STEPS` steps pass without a pellet. The stall plane in the observation makes this penalty Markov.
 
-The Atari paper, [*Playing Atari with Deep Reinforcement Learning*](https://arxiv.org/abs/1312.5602), learned from preprocessed visual observations. It converted emulator frames to a low-resolution grayscale representation and stacked four successive frames (commonly described as an `84 × 84 × 4` input) so a feed-forward network could infer motion from image changes.
+Previously the reward used its own pellet/death/win values whose ratios differed from the score (a death cost half as much, relative to pellets, as it does in the tournament), plus a per-step cost. A policy optimized for that reward is not optimizing the score it is judged on.
 
-| Aspect | This Pac-Man implementation | Atari paper setup |
+### Discount
+The discount's effective horizon, `1 / (1 − γ)`, must cover the span over which risk and reward matter. With a short horizon a death a few dozen steps ahead is nearly free compared to a pellet now, and the win bonus is invisible; that produces a greedy "eat until caught" policy. The default `gamma` is therefore long relative to typical episode lengths.
+
+### Episode ends
+- **Collision** and **board cleared**: terminal.
+- **Time limit** (`max_steps`): terminal for bootstrapping. This is correct *because* remaining horizon is part of the observation; without it, time-limit cutoffs would have to bootstrap.
+- **Stall: not an episode end.** The former stall cutoff existed only in training (evaluation and arenas never cut episodes), so the agent never learned what happens after a long pellet-less stretch. It is replaced by the per-step stall penalty above.
+
+## 4. Learning algorithm
+- **Double DQN** targets with **legal-action masks**: the next action is chosen by the online network among moves that are legal in the next state, and evaluated by the target network.
+- **Dueling** value/advantage heads.
+- **Prioritized replay** (proportional, exponent `alpha`) with importance-sampling weights; the IS exponent β is annealed from `per_beta_start` to 1 over the *episode* schedule (annealing by environment steps assumed every episode ran to the horizon, so β never reached 1).
+- **Huber loss**, gradient-norm clipping, periodic hard target sync, Adam with cosine learning-rate annealing.
+- **Replay storage:** preallocated fp16 ring arrays; full training-state checkpoints for `--resume` (see README).
+
+## 5. Comparison with the Atari DQN
+[*Playing Atari with Deep Reinforcement Learning*](https://arxiv.org/abs/1312.5602) learned from preprocessed grayscale frames stacked four deep so a feed-forward network could infer motion.
+
+| Aspect | This project | Atari DQN |
 | --- | --- | --- |
-| Observation source | Structured game state: maze cells, pellets, and actor coordinates | Emulator image frames |
-| Spatial representation | Binary semantic maps on a `21 × 19` grid | Preprocessed grayscale pixels at `84 × 84` per frame |
-| Temporal input | Current and previous position maps per actor plus explicit headings | Four successive image frames |
-| Object identity | Each ghost has its own current, history, and heading channels | Not supplied as labels; the network must infer objects from pixels |
-| Network | Small custom CNN with `3 × 3` convolutions, max pooling, and a 128-unit head; default dueling heads | CNN designed for the larger pixel input, with convolutional layers followed by a fully connected value output |
-| Learning details | Double-DQN targets, dueling architecture, prioritized replay, Huber loss, legal-action masks, and project-specific reward shaping | The paper's DQN uses replay memory and a target Q-network with its reported Atari preprocessing and training setup |
+| Observation | Symbolic 0/1 maps of maze, pellets, actors | Emulator pixels |
+| Motion | Previous positions + explicit headings | Four stacked frames |
+| Object identity | Per-ghost channels | Inferred from pixels |
+| Network | Narrow full-resolution `3 × 3` stack, dueling heads | Strided conv stack for large images |
+| Learning | Double DQN, dueling, prioritized replay, legal-action masks, score-aligned reward | Replay memory and target network |
 
-The representations serve different observation settings. Atari's frame stack compensates for the fact that a single image often does not reveal object velocity. This project has exact symbolic positions, so it can provide motion and identity directly without rendering pixels. A closer symbolic analogue to Atari's temporal stack would be several recent board observations, but that is not automatically better than explicit headings and per-ghost identity channels.
+The simulator exposes exact state, so imitating the pixel pipeline would only add work; the paper is a reference for end-to-end value learning, not a template for the input.
 
-The paper is a useful reference for temporal information and end-to-end visual learning, not a requirement to imitate its pixel input for a simulator that already exposes structured state. The practical comparison should be between observation variants trained from scratch under the same seeds, reward, and compute budget.
+## 6. Experiment protocol
+- Change **one thing per run** and compare on identical VAL seeds and training budgets.
+- Train long runs in sessions with `--stop-after` / `--resume` (resuming from a periodic or `--stop-after` checkpoint is exact).
+- Picking the best of many periodic validations on a small VAL set is optimistic; re-evaluate the selected checkpoint on a larger VAL set before comparing agents.
 
-## State variables that are missing or ambiguous
+## 7. Open design items
+1. Encoding cleanup (Section 1 redundancies) as one input-format change.
+2. Pac-Man-centered view as an alternative to the absolute-grid network.
+3. Inference heuristics (`REVERSAL_PENALTY`, `ORBIT_PENALTY_PER_VISIT` in `agents/dqn_agent.py`): the orbit penalty is large relative to Q-values and mostly masks training failures; reassess once the score-aligned objective is trained, and drop if no longer useful.
+4. Remove the legacy 6-channel checkpoint migration in `agents/dqn_agent.py` once no such checkpoints remain.
 
-### Implemented state variables
+## 8. Verification checklist
+- Identical encoded observations imply the same legal actions and reward semantics (up to ghost jitter).
+- Encodings differ when ghost identity, phase or headings differ and those change future transitions.
+- Reset/respawn observations are correct, including initial headings.
+- Replay stores exactly the observation used at inference time.
+- Stop/resume reproduces the uninterrupted run (`tests/test_train_resume.py`).
 
-The encoder now preserves ghost identity and headings, Pac-Man heading, the scatter/chase phase, the stall counter, and remaining episode horizon. Training, validation, tournaments, and interactive frontends pass the corresponding context into the same encoder. Time-limit and stall transitions are terminal for bootstrapping because they end the finite training episode.
-
-The 30-channel encoder changes checkpoint input semantics. Legacy six-channel checkpoints are loadable through a first-layer weight expansion for compatibility, but should be retrained before relying on their policy quality.
-
-## Variables that do not currently need encoding
-
-- **Ghost RNG state:** junction jitter makes transitions stochastic, but the random draw is exogenous; the agent does not need the random generator's internal state.
-- **Cumulative score:** it does not affect environment dynamics or the shaped DQN reward beyond pellet, collision, and win events.
-- **Illegal-move count:** DQN action selection is masked to legal moves, so this counter does not affect its normal transitions.
-- **Lives:** the training loop treats a collision as terminal. The interactive game can respawn and continue, so lives matter only if the intended learned objective spans multiple lives; in that case training and observation semantics would need to change together.
-
-## Next step
-
-Retrain checkpoints after changing the encoder, then compare against the current baseline on identical validation seeds. Legacy weights can be expanded to load but have not learned to use the added features, so their scores are not evidence for the new representation.
-
-## Verification checklist
-
-- Check that two states with identical encoded observations have the same legal actions and reward semantics for each action, except for intentional stochastic ghost choices.
-- Check that the encoded state distinguishes different ghost identities, scatter/chase phases, and headings when those variables change future transitions or rewards.
-- Check reset and respawn observations, including Pac-Man's initial heading and ghosts' initial headings.
-- Verify that replay stores the same complete observation at training and inference time.
-- Run regression checks and retrain/compare before relying on policy quality.
-
-## Relevant implementation files
-
-- `core/environment.py` — transition rules, ghost modes/headings, collision handling, and scoring constants.
-- `rl/dqn_model.py` — observation encoder and network input shape.
-- `rl/train_dqn.py` — reward shaping, stall logic, replay transitions, validation, and checkpointing.
-- `agents/dqn_agent.py` — inference-time state history and model input.
+## 9. Implementation files
+- `core/environment.py` — transition rules, ghost modes/headings, collision rule, scoring constants.
+- `rl/dqn_model.py` — observation encoder, `STALL_STEPS`, network architectures.
+- `rl/train_dqn.py` — reward, episode ends, replay, validation, checkpoints.
+- `agents/dqn_agent.py` — inference-time history, architecture detection, optional heuristics.
