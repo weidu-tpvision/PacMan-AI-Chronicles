@@ -106,3 +106,11 @@ while _active:
 MAZE_JUNCTIONS: Set[Tuple[int, int]] = {
     node for node, neighbors in MAZE_ADJ.items() if len(neighbors) >= 3
 }
+
+# Cells connected to Pac-Man's spawn. WALKABLE_CELLS also contains a few disconnected
+# pockets (tunnel side-rooms at rows 7/11 and the sealed ghost-house row), which have
+# no entry in MAZE_DIST_MATRIX relative to the playable maze - always use .get() lookups.
+_spawn = tuple(START_POSITIONS["pacman"])
+REACHABLE_CELLS: Set[Tuple[int, int]] = {
+    dst for (src, dst) in MAZE_DIST_MATRIX if src == _spawn
+}

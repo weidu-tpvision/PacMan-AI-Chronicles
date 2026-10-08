@@ -1,7 +1,10 @@
 """
-Q-Learning agents with linear feature approximations:
-1. PretrainedQLearningAgent: Textbook TD-learning baseline.
-2. TrainedQLearningAgent: Policy-optimized RL agent achieving 920+ average score.
+Q-learning agents with linear feature approximations:
+1. PretrainedQLearningAgent: Textbook TD-learning baseline (weights from rl/train_q_learning.py).
+2. TrainedQLearningAgent: Policy-optimized agent (weights from rl/optimize_policy.py, CEM search).
+
+Both agents share their feature extractors with their trainers via agents.features,
+guaranteeing train / inference parity.
 """
 
 import json
@@ -9,80 +12,81 @@ import logging
 import os
 import random
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
-from agents.base import DecisionResult, softmax
-from core.maze_data import (
-    DIRECTIONS,
-    GRID_WIDTH,
-    MAZE_DEAD_ENDS,
-    MAZE_DIST_MATRIX,
-    MAZE_JUNCTIONS,
-    OPPOSITE_DIRECTIONS,
+from agents.base import DecisionResult, margin_confidence, softmax
+from agents.features import (
+    ENHANCED_FEATURES,
+    TEXTBOOK_FEATURES,
+    enhanced_features,
+    linear_q,
+    textbook_features,
 )
+from agents.paths import resolve_weights_path
+
+logger = logging.getLogger(__name__)
+
+TEXTBOOK_DEFAULT_WEIGHTS: Dict[str, float] = {
+    "ghost_1_step": -180.0,
+    "ghost_2_step": -50.0,
+    "ghost_3_step": -15.0,
+    "ghost_safe_dist": 20.0,
+    "eats_pellet": 35.0,
+    "nearest_pellet_dist": -15.0,
+    "reverse_penalty": -8.0,
+}
+
+ENHANCED_DEFAULT_WEIGHTS: Dict[str, float] = {
+    "ghost_1_step": -450.0,
+    "ghost_2_step": -140.0,
+    "ghost_3_step": -20.0,
+    "ghost_safe_dist": 3.0,
+    "dead_end_trap": -280.0,
+    "safe_junction": 20.0,
+    "eats_pellet": 70.0,
+    "poisoned_pellet": -240.0,
+    "nearest_pellet_dist": -1.2,
+    "reverse_penalty": -30.0,
+}
 
 
-def _resolve_weight_path(filename: str) -> str:
-    """Find weights file in rl/weights/, current directory, or parent directory."""
-    candidates = [
-        os.path.join(os.path.dirname(__file__), "..", "rl", "weights", filename),
-        os.path.join("rl", "weights", filename),
-        os.path.join(os.path.dirname(__file__), "..", filename),
-        filename,
-    ]
-    for c in candidates:
-        if os.path.exists(c):
-            return os.path.abspath(c)
-    return filename
+def _load_weights(filename: str, expected: List[str], defaults: Dict[str, float]) -> Tuple[Dict[str, float], bool]:
+    """Load weights JSON; validates the feature schema. Returns (weights, loaded_from_file)."""
+    path = resolve_weights_path(filename)
+    if not os.path.exists(path):
+        logger.warning("Weights file %s not found - using built-in defaults.", path)
+        return dict(defaults), False
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as exc:
+        logger.warning("Failed to load weights from %s (%s) - using defaults.", path, exc)
+        return dict(defaults), False
+    if set(data) != set(expected):
+        logger.warning(
+            "Weights in %s have keys %s but expected %s - using defaults.", path, sorted(data), sorted(expected)
+        )
+        return dict(defaults), False
+    return {k: float(v) for k, v in data.items()}, True
 
 
-class PretrainedQLearningAgent:
-    """Textbook Q-Learning baseline agent with standard classic features."""
+class _LinearQAgent:
+    """Shared decision logic for linear Q-value agents."""
 
-    def __init__(self, name: str = "Q-Learning (Textbook Baseline)"):
+    temp: float = 15.0
+    feature_fn: Callable = staticmethod(textbook_features)
+
+    def __init__(self, name: str, category: str, weights: Dict[str, float], weights_loaded: bool):
         self.name = name
-        self.category = "Classic TD-Learning (0.01ms)"
-        self.weights = {
-            "ghost_1_step": -120.0,
-            "ghost_2_step": -35.0,
-            "eats_pellet": 25.0,
-            "nearest_pellet_dist": -1.8,
-            "reverse_penalty": -6.0,
-        }
+        self.category = category
+        self.weights = weights
+        self.weights_loaded = weights_loaded
 
     def reset(self) -> None:
         """Stateless agent - reset is a no-op."""
-        pass
 
-    def get_features(
-        self,
-        pacman_pos: Tuple[int, int],
-        ghost_positions: List[Tuple[int, int]],
-        pellets: set,
-        action: str,
-        last_move: Optional[str] = None,
-    ) -> Dict[str, float]:
-        px, py = pacman_pos
-        dx, dy = DIRECTIONS[action]
-        nx, ny = (px + dx) % GRID_WIDTH, py + dy
-
-        min_ghost_dist = min(abs(nx - gx) + abs(ny - gy) for gx, gy in ghost_positions)
-
-        feats = {
-            "ghost_1_step": 1.0 if min_ghost_dist <= 1 else 0.0,
-            "ghost_2_step": 1.0 if min_ghost_dist == 2 else 0.0,
-            "eats_pellet": 1.0 if (nx, ny) in pellets else 0.0,
-            "nearest_pellet_dist": 0.0,
-            "reverse_penalty": 1.0 if (last_move and action == OPPOSITE_DIRECTIONS.get(last_move)) else 0.0,
-        }
-
-        if pellets:
-            sample_pellets = list(pellets)[:25]
-            feats["nearest_pellet_dist"] = float(
-                min(abs(nx - fx) + abs(ny - fy) for fx, fy in sample_pellets)
-            )
-
-        return feats
+    def get_features(self, pacman_pos, ghost_positions, pellets, action, last_move=None) -> Dict[str, float]:
+        return type(self).feature_fn(pacman_pos, ghost_positions, pellets, action, last_move)
 
     def decide(
         self,
@@ -94,156 +98,50 @@ class PretrainedQLearningAgent:
     ) -> DecisionResult:
         t0 = time.perf_counter()
         if not legal_moves:
-            return DecisionResult("left", {}, 0.0, 0.0, False)
+            return DecisionResult("left", {}, 0.0, 0.0, False, error_msg="no legal moves")
 
-        q_values = {}
-        for m in legal_moves:
-            feats = self.get_features(pacman_pos, ghost_positions, pellets, m, last_move)
-            q_values[m] = sum(self.weights.get(k, 0.0) * feats.get(k, 0.0) for k in self.weights)
-
+        q_values = {
+            m: linear_q(self.weights, self.get_features(pacman_pos, ghost_positions, pellets, m, last_move))
+            for m in legal_moves
+        }
         best_q = max(q_values.values())
-        best_moves = [m for m in legal_moves if q_values[m] == best_q]
-        choice = random.choice(best_moves)
+        choice = random.choice([m for m in legal_moves if q_values[m] == best_q])
 
-        dist = softmax(q_values, temp=15.0)
-        sorted_probs = sorted(dist.values(), reverse=True)
-        conf = (sorted_probs[0] - sorted_probs[1]) if len(sorted_probs) > 1 else 1.0
-        lat = (time.perf_counter() - t0) * 1000.0
-
+        dist = softmax(q_values, temp=self.temp)
         return DecisionResult(
             choice=choice,
             probabilities=dist,
-            confidence=round(conf, 3),
-            latency_ms=lat,
+            confidence=margin_confidence(dist),
+            latency_ms=(time.perf_counter() - t0) * 1000.0,
             is_live=False,
         )
 
 
-class TrainedQLearningAgent:
-    """Policy-Optimized RL Agent: High-scoring policy (920+ pts) trained with topological features."""
+class PretrainedQLearningAgent(_LinearQAgent):
+    """Textbook approximate Q-learning agent (classic features, TD-trained weights)."""
+
+    temp = 15.0
+    feature_fn = staticmethod(textbook_features)
+
+    def __init__(
+        self,
+        name: str = "Q-Learning (Textbook Baseline)",
+        weights_path: str = "learned_q_weights.json",
+    ):
+        weights, loaded = _load_weights(weights_path, TEXTBOOK_FEATURES, TEXTBOOK_DEFAULT_WEIGHTS)
+        super().__init__(name, "Classic TD-Learning", weights, loaded)
+
+
+class TrainedQLearningAgent(_LinearQAgent):
+    """Policy-optimized agent: CEM-searched weights over topological graph features."""
+
+    temp = 35.0
+    feature_fn = staticmethod(enhanced_features)
 
     def __init__(
         self,
         weights_path: str = "learned_enhanced_weights.json",
         name: str = "RL (Policy Optimized)",
     ):
-        self.name = name
-        self.category = "Optimized RL Policy (920+ pts)"
-        # Default high-performance weights in case file is absent
-        self.weights = {
-            "ghost_1_step": -455.74,
-            "ghost_2_step": -139.63,
-            "ghost_3_step": -19.17,
-            "ghost_safe_dist": 2.70,
-            "dead_end_trap": -275.63,
-            "safe_junction": 20.93,
-            "eats_pellet": 71.94,
-            "poisoned_pellet": -241.15,
-            "nearest_pellet_dist": -1.14,
-            "reverse_penalty": -29.96,
-        }
-
-        resolved_path = _resolve_weight_path(weights_path)
-        if not os.path.exists(resolved_path):
-            resolved_path = _resolve_weight_path("learned_q_weights.json")
-
-        if os.path.exists(resolved_path):
-            try:
-                with open(resolved_path, "r", encoding="utf-8") as f:
-                    self.weights = json.load(f)
-            except Exception as exc:
-                logging.warning("Failed to load weights from %s: %s", resolved_path, exc)
-
-    def reset(self) -> None:
-        """Stateless agent - reset is a no-op."""
-        pass
-
-    def get_features(
-        self,
-        pacman_pos: Tuple[int, int],
-        ghost_positions: List[Tuple[int, int]],
-        pellets: set,
-        action: str,
-        last_move: Optional[str] = None,
-    ) -> Dict[str, float]:
-        px, py = pacman_pos
-        dx, dy = DIRECTIONS[action]
-        nx, ny = (px + dx) % GRID_WIDTH, py + dy
-
-        ghost_bfs_dists = [
-            MAZE_DIST_MATRIX.get(((nx, ny), tuple(g)), 99) for g in ghost_positions
-        ]
-        min_ghost_bfs = min(ghost_bfs_dists) if ghost_bfs_dists else 99
-
-        # Dead-end trap detection
-        is_dead_end = (nx, ny) in MAZE_DEAD_ENDS
-        depth = MAZE_DEAD_ENDS.get((nx, ny), 0)
-        is_dead_end_trap = 1.0 if (is_dead_end and min_ghost_bfs <= depth + 3) else 0.0
-
-        # Safe junction mobility
-        is_safe_junction = 1.0 if ((nx, ny) in MAZE_JUNCTIONS and min_ghost_bfs > 2) else 0.0
-
-        # Pellet evaluation: safe vs poisoned trap
-        eats_pellet = 1.0 if (nx, ny) in pellets else 0.0
-        poisoned_pellet = 1.0 if (eats_pellet and (min_ghost_bfs <= 2 or is_dead_end_trap)) else 0.0
-
-        # Nearest pellet distance via graph BFS
-        nearest_pellet_dist = 0.0
-        if pellets:
-            sample_p = list(pellets)[:35]
-            nearest_pellet_dist = float(
-                min(MAZE_DIST_MATRIX.get(((nx, ny), p), 99) for p in sample_p)
-            )
-
-        rev_pen = (
-            1.0
-            if (last_move and action == OPPOSITE_DIRECTIONS.get(last_move) and min_ghost_bfs > 3)
-            else 0.0
-        )
-
-        return {
-            "ghost_1_step": 1.0 if min_ghost_bfs <= 1 else 0.0,
-            "ghost_2_step": 1.0 if min_ghost_bfs == 2 else 0.0,
-            "ghost_3_step": 1.0 if min_ghost_bfs == 3 else 0.0,
-            "ghost_safe_dist": float(min_ghost_bfs) if min_ghost_bfs > 3 else 0.0,
-            "dead_end_trap": is_dead_end_trap,
-            "safe_junction": is_safe_junction,
-            "eats_pellet": eats_pellet,
-            "poisoned_pellet": poisoned_pellet,
-            "nearest_pellet_dist": nearest_pellet_dist,
-            "reverse_penalty": rev_pen,
-        }
-
-    def decide(
-        self,
-        pacman_pos: Tuple[int, int],
-        ghost_positions: List[Tuple[int, int]],
-        pellets: set,
-        legal_moves: List[str],
-        last_move: Optional[str] = None,
-    ) -> DecisionResult:
-        t0 = time.perf_counter()
-        if not legal_moves:
-            return DecisionResult("left", {}, 0.0, 0.0, False)
-
-        q_values = {}
-        for m in legal_moves:
-            feats = self.get_features(pacman_pos, ghost_positions, pellets, m, last_move)
-            q_values[m] = sum(self.weights.get(k, 0.0) * feats.get(k, 0.0) for k in self.weights)
-
-        best_q = max(q_values.values())
-        best_moves = [m for m in legal_moves if q_values[m] == best_q]
-        choice = random.choice(best_moves)
-
-        dist = softmax(q_values, temp=35.0)
-        sorted_probs = sorted(dist.values(), reverse=True)
-        conf = (sorted_probs[0] - sorted_probs[1]) if len(sorted_probs) > 1 else 1.0
-        lat = (time.perf_counter() - t0) * 1000.0
-
-        return DecisionResult(
-            choice=choice,
-            probabilities=dist,
-            confidence=round(conf, 3),
-            latency_ms=lat,
-            is_live=False,
-        )
+        weights, loaded = _load_weights(weights_path, ENHANCED_FEATURES, ENHANCED_DEFAULT_WEIGHTS)
+        super().__init__(name, "Optimized RL Policy (CEM)", weights, loaded)

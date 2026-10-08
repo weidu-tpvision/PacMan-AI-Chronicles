@@ -102,21 +102,23 @@ Rather than compressing objects into a scalar matrix where negative values colli
 * **Conv 1**: `Conv2d(6, 32, kernel=3, padding=1)` + ReLU (local entity & velocity detection)
 * **Conv 2**: `Conv2d(32, 64, kernel=3, padding=1)` + ReLU (corridor & intersection features)
 * **Pooling**: `MaxPool2d(kernel=2, stride=2)` ($21 \times 19 \to 10 \times 9$, expanding the receptive field to $10 \times 10$ tiles so the agent perceives distant pellet clusters across the maze)
-* **Linear 1**: `Linear(5760, 128)` + ReLU
-* **Linear 2**: `Linear(128, 4)` outputting Q-values for `[up, down, left, right]`
+* **Shared feature head**: `Linear(5760, 128)` + ReLU
+* **Dueling heads**: `Linear(128, 1)` for state value $V(s)$ and `Linear(128, 4)` for action advantages $A(s,a)$.
+* **Aggregation**: $Q(s,a)=V(s)+A(s,a)-\operatorname{mean}_{a'}A(s,a')$, outputting Q-values for `[up, down, left, right]`.
 * **Total Parameters**: $\approx 758\text{k}$ (~0.26 ms CPU inference)
 
 ### 4. Double DQN & Optimization
 * **Target Network**: Decouples action selection from action evaluation to eliminate maximization bias:
-  $$y = r + \gamma (1 - d) Q_{\text{target}}\left(s', \arg\max_{a'} Q_{\text{policy}}(s', a')\right)$$
+  $$y = r + \gamma (1 - d) Q_{\text{target}}\left(s', \arg\max_{a' \in A_{\text{legal}}(s')} Q_{\text{policy}}(s', a')\right)$$
+* **Prioritized replay**: Samples transitions in proportion to $(|\delta|+\epsilon)^{0.6}$ and applies annealed importance-sampling weights to the per-item Huber loss.
 * **Loss**: Smooth L1 (Huber) Loss with gradient norm clipping (`max_norm = 5.0`).
-* **Optimizer**: Adam ($\text{lr} = 5 \times 10^{-4}$).
+* **Optimizer**: Adam with cosine annealing from $5 \times 10^{-4}$ to $5 \times 10^{-5}$ over the requested episode count.
 * **Tournament Score**: **126.6 pts** (32.7 pellets, 40.8 moves across 100 seeded episodes under unified Scatter/Chase dynamics).
 
 ### 5. Training Analysis & Diagnostic Protocol (Mandatory for Every Run)
 Every DQN training run must follow this standardized automated diagnostic and analysis workflow:
 
-1. **Per-Episode Metrics Logging**: Record `episode`, `score`, `train_avg_score`, `pellets`, `reward`, `steps`, `loss`, `epsilon`, `val_score`, and `val_pellets` in [`rl/weights/dqn_training_metrics.json`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/rl/weights/dqn_training_metrics.json) and `.csv`.
+1. **Per-Episode Metrics Logging**: Record `episode`, `score`, `train_avg_score`, `pellets`, `reward`, `steps`, `loss`, `epsilon`, `learning_rate`, `val_score`, and `val_pellets` in [`rl/weights/dqn_training_metrics.json`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/rl/weights/dqn_training_metrics.json) and `.csv`.
 2. **Automated Multi-Panel Figure Generation**: The training runner must execute [`rl/plot_metrics.py`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/rl/plot_metrics.py) at the end of training to generate:
    * **Vector Dashboard**: [`rl/weights/dqn_training_figures.svg`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/rl/weights/dqn_training_figures.svg) (scalable publication quality).
    * **Raster Dashboard**: [`rl/weights/dqn_training_figures.png`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/rl/weights/dqn_training_figures.png) (4-panel visual dashboard).
@@ -136,6 +138,10 @@ Every DQN training run must follow this standardized automated diagnostic and an
 * **Positive Score Cross-Over**: By Q2 and Q4, net training scores crossed into solid positive territory ($+1.3$ in Q2, $+22.1$ in Q4) with survival rates reaching **$46.3\%$**.
 * **Loss Dynamics**: Huber loss stabilized around $\sim 21$ in late training as the network resolved high-reward scatter clearing opportunities vs. ambush traps.
 * **Peak Policy Checkpoint**: The best validation checkpoint was saved at **Episode 400** (Validation score: **$+148.0\text{ pts}$**, **$34.8\text{ pellets}$**), saved to [`rl/weights/dqn_pacman.pt`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/rl/weights/dqn_pacman.pt).
+
+#### Extended Training Run (5,000 Episodes)
+
+The current checkpoint and diagnostics come from a 5,000-episode run using prioritized replay, a dueling head, legal-action-masked Double-DQN targets, and cosine learning-rate annealing. The best mean validation score was **$+1,018.0$** at episode **4,900** over 20 fixed validation seeds; episode 5,000 validation was **$+810.5$**. Checkpoint selection retained episode 4,900. Validation scores are model-selection results, not held-out tournament scores.
 
 ### 6. Standardized Simulation Engine (`core.environment.Environment`)
 * **Single Source of Truth**: All game arenas ([`pacman_game.py`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/pacman_game.py), [`web_arena.py`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/web_arena.py)), training pipelines ([`rl/train_dqn.py`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/rl/train_dqn.py), [`rl/train_q_learning.py`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/rl/train_q_learning.py), [`rl/optimize_policy.py`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/rl/optimize_policy.py)), and tournament runners ([`compare_baselines.py`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/compare_baselines.py)) share the exact same `core.environment.Environment` engine.

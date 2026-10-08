@@ -100,8 +100,9 @@ if TORCH_AVAILABLE:
         Uses MaxPool2d(2) to provide a 10x10 receptive field for global maze vision.
         """
 
-        def __init__(self, in_channels: int = NUM_CHANNELS, num_actions: int = 4):
+        def __init__(self, in_channels: int = NUM_CHANNELS, num_actions: int = 4, dueling: bool = True):
             super().__init__()
+            self.dueling = dueling
 
             self.conv = nn.Sequential(
                 nn.Conv2d(in_channels, 32, kernel_size=3, padding=1),
@@ -112,16 +113,31 @@ if TORCH_AVAILABLE:
             )
 
             # 64 channels * 10 height * 9 width = 5,760 features
-            self.fc = nn.Sequential(
-                nn.Flatten(),
-                nn.Linear(64 * 10 * 9, 128),
-                nn.ReLU(),
-                nn.Linear(128, num_actions),
-            )
+            if dueling:
+                self.feature_head = nn.Sequential(
+                    nn.Flatten(),
+                    nn.Linear(64 * 10 * 9, 128),
+                    nn.ReLU(),
+                )
+                self.value_head = nn.Linear(128, 1)
+                self.advantage_head = nn.Linear(128, num_actions)
+            else:
+                # Retain the original module names and shapes so historical checkpoints load.
+                self.fc = nn.Sequential(
+                    nn.Flatten(),
+                    nn.Linear(64 * 10 * 9, 128),
+                    nn.ReLU(),
+                    nn.Linear(128, num_actions),
+                )
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             features = self.conv(x)
-            return self.fc(features)
+            if not self.dueling:
+                return self.fc(features)
+            features = self.feature_head(features)
+            value = self.value_head(features)
+            advantage = self.advantage_head(features)
+            return value + advantage - advantage.mean(dim=1, keepdim=True)
 else:
     class PacmanDQN:
         def __init__(self, *args, **kwargs):

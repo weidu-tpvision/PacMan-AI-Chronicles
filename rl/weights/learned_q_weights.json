@@ -1,12 +1,9 @@
 {
-  "ghost_1_step": -455.7358987396325,
-  "ghost_2_step": -139.63378136860433,
-  "ghost_3_step": -19.172055692404584,
-  "ghost_safe_dist": 2.701251139967094,
-  "dead_end_trap": -275.63091571734145,
-  "safe_junction": 20.933765680504845,
-  "eats_pellet": 71.93964356580007,
-  "poisoned_pellet": -241.14899910394777,
-  "nearest_pellet_dist": -1.1438616445903318,
-  "reverse_penalty": -29.961276245895977
+  "ghost_1_step": -128.0281,
+  "ghost_2_step": -5.222,
+  "ghost_3_step": 27.0219,
+  "ghost_safe_dist": 65.9508,
+  "eats_pellet": 42.0319,
+  "nearest_pellet_dist": -45.8234,
+  "reverse_penalty": -2.8191
 }

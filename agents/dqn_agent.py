@@ -1,6 +1,12 @@
 """
 Deep Q-Network Agent: Executes forward passes on the trained PyTorch CNN model.
 Uses unentangled 6-channel state encoding with velocity/momentum awareness.
+
+Two evaluation modes:
+  heuristics=False  -> pure greedy argmax over the network's Q-values (the policy that
+                       training validates and checkpoints; reported as "DQN (raw)").
+  heuristics=True   -> adds inference-time reversal and anti-orbit penalties on top of
+                       the network (reported separately as "DQN (+heuristics)").
 """
 
 import collections
@@ -10,38 +16,21 @@ import random
 import time
 from typing import List, Optional, Tuple
 
-import numpy as np
-from agents.base import DecisionResult, softmax
+from agents.base import DecisionResult, margin_confidence, softmax
+from agents.paths import resolve_weights_path
+from core.maze_data import DIRECTIONS, GRID_WIDTH, OPPOSITE_DIRECTIONS
 
 try:
     import torch
-    from rl.dqn_model import (
-        ACTION_TO_IDX,
-        NUM_CHANNELS,
-        FRAME_STACK_SIZE,
-        PacmanDQN,
-        encode_frame,
-        encode_state,
-    )
+    from rl.dqn_model import ACTION_TO_IDX, NUM_CHANNELS, PacmanDQN, encode_state
     TORCH_AVAILABLE = True
-except ImportError:
+except ImportError:  # pragma: no cover - exercised only on torch-less installs
     TORCH_AVAILABLE = False
 
-from core.maze_data import DIRECTIONS, GRID_WIDTH, OPPOSITE_DIRECTIONS
+logger = logging.getLogger(__name__)
 
-
-def _resolve_model_path(filename: str) -> str:
-    """Find checkpoint in rl/weights/, current directory, or parent directory."""
-    candidates = [
-        os.path.join(os.path.dirname(__file__), "..", "rl", "weights", filename),
-        os.path.join("rl", "weights", filename),
-        os.path.join(os.path.dirname(__file__), "..", filename),
-        filename,
-    ]
-    for c in candidates:
-        if os.path.exists(c):
-            return os.path.abspath(c)
-    return filename
+REVERSAL_PENALTY = 1.0
+ORBIT_PENALTY_PER_VISIT = 20.0
 
 
 class DQNAgent:
@@ -51,31 +40,51 @@ class DQNAgent:
         self,
         model_path: str = "dqn_pacman.pt",
         name: str = "Deep Q-Network (PyTorch DQN)",
-        k: int = NUM_CHANNELS,
+        heuristics: bool = True,
+        require_weights: bool = False,
     ):
+        """
+        Args:
+            model_path: checkpoint filename / path (resolved via rl/weights/).
+            heuristics: apply inference-time reversal / anti-orbit penalties.
+            require_weights: raise RuntimeError if torch or the checkpoint is unavailable
+                (use for benchmarks). Otherwise the agent degrades to a uniform random
+                policy and tags its name with "[UNTRAINED]" so results cannot be mistaken.
+        """
         self.name = name
         self.category = "Deep Neural RL (PyTorch CNN)"
-        self.k = k
+        self.heuristics = heuristics
         self.prev_pacman: Optional[Tuple[int, int]] = None
         self.prev_ghosts: Optional[List[Tuple[int, int]]] = None
-        self.recent_positions = collections.deque(maxlen=16)
+        self.recent_positions: collections.deque = collections.deque(maxlen=16)
         self.last_pellet_count: Optional[int] = None
         self.model_loaded = False
         self.model = None
+        self.model_path = resolve_weights_path(model_path)
 
-        if TORCH_AVAILABLE:
+        problem: Optional[str] = None
+        if not TORCH_AVAILABLE:
+            problem = "PyTorch is not installed"
+        elif not os.path.exists(self.model_path):
+            problem = f"checkpoint not found at {self.model_path}"
+        else:
             self.device = torch.device("cpu")
-            self.model = PacmanDQN(in_channels=NUM_CHANNELS).to(self.device)
-            resolved = _resolve_model_path(model_path)
-            if os.path.exists(resolved):
-                try:
-                    self.model.load_state_dict(
-                        torch.load(resolved, map_location=self.device, weights_only=True)
-                    )
-                    self.model_loaded = True
-                except Exception as exc:
-                    logging.warning("Failed to load DQN model weights from %s: %s", resolved, exc)
-            self.model.eval()
+            try:
+                state_dict = torch.load(self.model_path, map_location=self.device, weights_only=True)
+                # Preserve inference for checkpoints trained before the dueling head.
+                model = PacmanDQN(in_channels=NUM_CHANNELS, dueling="value_head.weight" in state_dict).to(self.device)
+                model.load_state_dict(state_dict)
+                model.eval()
+                self.model = model
+                self.model_loaded = True
+            except Exception as exc:  # corrupted / incompatible checkpoint
+                problem = f"failed to load checkpoint {self.model_path}: {exc}"
+
+        if problem:
+            if require_weights:
+                raise RuntimeError(f"DQNAgent unavailable: {problem}")
+            logger.warning("DQNAgent running UNTRAINED random fallback: %s", problem)
+            self.name = f"{name} [UNTRAINED]"
 
     def reset(self):
         """Reset temporal state tracking for a new game episode."""
@@ -94,9 +103,15 @@ class DQNAgent:
     ) -> DecisionResult:
         t0 = time.perf_counter()
 
-        if not TORCH_AVAILABLE or self.model is None or not legal_moves:
-            m = random.choice(legal_moves) if legal_moves else "left"
-            return DecisionResult(m, {m: 1.0}, 1.0, 0.05, False)
+        if not legal_moves:
+            return DecisionResult("left", {}, 0.0, 0.0, False, error_msg="no legal moves")
+        if not self.model_loaded:
+            m = random.choice(legal_moves)
+            p = 1.0 / len(legal_moves)
+            return DecisionResult(
+                m, {mv: p for mv in legal_moves}, 0.0, (time.perf_counter() - t0) * 1000.0, False,
+                error_msg="untrained fallback",
+            )
 
         # Detect new episode or respawn if position jumped significantly (toroidal aware)
         if self.prev_pacman is not None:
@@ -104,16 +119,14 @@ class DQNAgent:
             dx = min(dx, GRID_WIDTH - dx)
             dy = abs(pacman_pos[1] - self.prev_pacman[1])
             if dx + dy > 2:
-                self.prev_pacman = None
-                self.prev_ghosts = None
-                self.recent_positions.clear()
+                self.reset()
 
         # Update visit history to detect and break local corridor loops
         curr_pellets = len(pellets)
-        if self.last_pellet_count is None or curr_pellets < self.last_pellet_count:
+        if self.last_pellet_count is None or curr_pellets != self.last_pellet_count:
             self.recent_positions.clear()
             self.last_pellet_count = curr_pellets
-        self.recent_positions.append(pacman_pos)
+        self.recent_positions.append(tuple(pacman_pos))
 
         state_arr = encode_state(
             pacman_pos=pacman_pos,
@@ -124,7 +137,7 @@ class DQNAgent:
         )
 
         # Update previous positions for next step
-        self.prev_pacman = pacman_pos
+        self.prev_pacman = tuple(pacman_pos)
         self.prev_ghosts = [tuple(g) for g in ghost_positions]
 
         with torch.no_grad():
@@ -132,35 +145,30 @@ class DQNAgent:
             raw_q = self.model(s_tensor).squeeze(0)
 
         legal_q = {m: raw_q[ACTION_TO_IDX[m]].item() for m in legal_moves}
-        if last_move and len(legal_moves) > 1:
-            opp = OPPOSITE_DIRECTIONS.get(last_move)
-            if opp in legal_q:
-                legal_q[opp] -= 1.0
 
-        # Anti-orbit penalty: if a move steps into a tile visited multiple times without collecting food,
-        # apply a penalty to break out of empty corridor cycles
-        if len(legal_moves) > 1 and len(self.recent_positions) >= 4:
-            for m in legal_moves:
-                dx, dy = DIRECTIONS[m]
-                nx = (pacman_pos[0] + dx) % GRID_WIDTH
-                ny = pacman_pos[1] + dy
-                visit_count = self.recent_positions.count((nx, ny))
-                if visit_count >= 2:
-                    legal_q[m] -= visit_count * 20.0
+        if self.heuristics and len(legal_moves) > 1:
+            if last_move:
+                opp = OPPOSITE_DIRECTIONS.get(last_move)
+                if opp in legal_q:
+                    legal_q[opp] -= REVERSAL_PENALTY
+
+            # Anti-orbit penalty: stepping into a tile visited repeatedly without eating
+            if len(self.recent_positions) >= 4:
+                for m in legal_moves:
+                    dx, dy = DIRECTIONS[m]
+                    nxt = ((pacman_pos[0] + dx) % GRID_WIDTH, pacman_pos[1] + dy)
+                    visit_count = self.recent_positions.count(nxt)
+                    if visit_count >= 2:
+                        legal_q[m] -= visit_count * ORBIT_PENALTY_PER_VISIT
 
         best_q = max(legal_q.values())
-        best_moves = [m for m in legal_moves if legal_q[m] == best_q]
-        choice = random.choice(best_moves)
+        choice = random.choice([m for m in legal_moves if legal_q[m] == best_q])
 
         dist = softmax(legal_q, temp=15.0)
-        sorted_probs = sorted(dist.values(), reverse=True)
-        conf = (sorted_probs[0] - sorted_probs[1]) if len(sorted_probs) > 1 else 1.0
-        lat = (time.perf_counter() - t0) * 1000.0
-
         return DecisionResult(
             choice=choice,
             probabilities=dist,
-            confidence=round(conf, 3),
-            latency_ms=lat,
+            confidence=margin_confidence(dist),
+            latency_ms=(time.perf_counter() - t0) * 1000.0,
             is_live=False,
         )

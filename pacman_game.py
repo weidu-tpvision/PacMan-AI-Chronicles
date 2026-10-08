@@ -10,11 +10,9 @@ import argparse
 import collections
 import math
 import os
-import random
 import sys
 import threading
-import time
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional
 
 try:
     import pygame
@@ -23,24 +21,11 @@ except ImportError:
     print("Please install it with: pip install pygame-ce\n")
     sys.exit(1)
 
-from agents import (
-    DQNAgent,
-    GreedyHeuristicAgent,
-    PretrainedQLearningAgent,
-    RandomAgent,
-    SystemOneBaselineAgent,
-    TrainedQLearningAgent,
-)
-from core.environment import Environment
-from core.maze_data import (
-    DIRECTIONS,
-    GRID_HEIGHT,
-    GRID_WIDTH,
-    MAZE_LAYOUT,
-    OPPOSITE_DIRECTIONS,
-    START_POSITIONS,
-)
-from llm.decision_client import DecisionResult, SystemOneAgent
+from agents.base import DecisionResult
+from agents.registry import build_controllers
+from core.environment import SCORE_DEATH, SCORE_PELLET, SCORE_WIN, Environment
+from core.maze_data import GRID_HEIGHT, GRID_WIDTH
+from llm.decision_client import SystemOneAgent
 
 
 # Colors
@@ -106,57 +91,8 @@ class PacmanGame:
             prefer_live=(not force_mock),
         )
 
-        # Register all 6 controllers in clean 1-6 order
-        self.controllers = [
-            {
-                "id": "rl_opt",
-                "name": "RL (Policy Optimized)",
-                "badge": "Graph-Aware RL (920+ pts)",
-                "color": (168, 85, 247),     # Purple
-                "type_label": "POLICY Q-VALUES",
-                "agent": TrainedQLearningAgent(),
-            },
-            {
-                "id": "dqn",
-                "name": "Deep Q-Network (DQN)",
-                "badge": "Deep Neural RL (PyTorch CNN)",
-                "color": (236, 72, 153),     # Pink / Magenta
-                "type_label": "DEEP Q-VALUES",
-                "agent": DQNAgent(),
-            },
-            {
-                "id": "sys1",
-                "name": f"System 1 ({model})",
-                "badge": "Neural Zero-Shot (~90ms)",
-                "color": (56, 189, 248),      # Sky blue
-                "type_label": "LOGIT PROBABILITIES",
-                "agent": SystemOneBaselineAgent(self.sys1_backend),
-            },
-            {
-                "id": "greedy",
-                "name": "Greedy Heuristic",
-                "badge": "Handcrafted Rules (570 pts)",
-                "color": (34, 197, 94),      # Emerald
-                "type_label": "HEURISTIC WEIGHTS",
-                "agent": GreedyHeuristicAgent(),
-            },
-            {
-                "id": "rl_textbook",
-                "name": "Q-Learning (Textbook)",
-                "badge": "Classic TD-Learning (717 pts)",
-                "color": (245, 158, 11),     # Amber
-                "type_label": "BELLMAN Q-VALUES",
-                "agent": PretrainedQLearningAgent(),
-            },
-            {
-                "id": "random",
-                "name": "Random Agent",
-                "badge": "Noise Floor (Baseline)",
-                "color": (239, 68, 68),      # Red
-                "type_label": "UNIFORM SELECTION",
-                "agent": RandomAgent(),
-            },
-        ]
+        # Register all 6 controllers in clean 1-6 order (shared with web_arena.py)
+        self.controllers = build_controllers(self.sys1_backend, model)
 
         self.active_idx = initial_agent_idx % len(self.controllers)
 
@@ -170,13 +106,15 @@ class PacmanGame:
         self.banner_text: Optional[str] = None
         self.banner_timer = 0.0
 
-        # Async query support & active decision telemetry
+        # Async query support & active decision telemetry.
+        # `decision_epoch` is bumped on reset / agent switch / respawn so results computed
+        # for a stale game state are discarded instead of being applied to the new one.
         self.pending_decision = False
-        self.decision_lock = threading.Lock()
+        self.decision_epoch = 0
+        self.decision_lock = threading.RLock()
         self.latest_decision_result: Optional[DecisionResult] = None
         self.active_decision: Optional[DecisionResult] = None
         self.move_history = collections.deque(maxlen=6)
-
         # Game State
         self.reset_game()
 
@@ -187,6 +125,7 @@ class PacmanGame:
     def set_controller(self, idx: int):
         idx = idx % len(self.controllers)
         if idx != self.active_idx:
+            self._invalidate_pending_decision()
             self.active_idx = idx
             c = self.current_controller
             if hasattr(c["agent"], "reset"):
@@ -194,8 +133,17 @@ class PacmanGame:
             self.banner_text = f"Switched AI: {c['name']}"
             self.banner_timer = 2.0
 
+    def _invalidate_pending_decision(self):
+        """Discard any decision computed for the previous agent or game state."""
+        with self.decision_lock:
+            self.decision_epoch += 1
+            self.pending_decision = False
+            self.latest_decision_result = None
+            self.active_decision = None
+
     def reset_game(self):
         """Reset full game to initial state."""
+        self._invalidate_pending_decision()
         for c in self.controllers:
             if hasattr(c["agent"], "reset"):
                 c["agent"].reset()
@@ -226,23 +174,26 @@ class PacmanGame:
 
     def start_decision_query(self, legal_moves: List[str]):
         """Run decision query in background thread."""
-        if self.pending_decision:
-            return
-
-        self.pending_decision = True
-        pac_pos = tuple(self.pacman_pos)
-        ghost_pos = [tuple(g) for g in self.ghost_positions]
-        pellets_copy = set(self.pellets)
-        last_move = self.last_move
-        active_agent = self.current_controller["agent"]
+        with self.decision_lock:
+            if self.pending_decision:
+                return
+            self.pending_decision = True
+            request_epoch = self.decision_epoch
+            pac_pos = tuple(self.pacman_pos)
+            ghost_pos = [tuple(g) for g in self.ghost_positions]
+            pellets_copy = set(self.pellets)
+            legal_copy = list(legal_moves)
+            last_move = self.last_move
+            active_agent = self.current_controller["agent"]
 
         def worker():
             res = active_agent.decide(
-                pac_pos, ghost_pos, pellets_copy, legal_moves, last_move
+                pac_pos, ghost_pos, pellets_copy, legal_copy, last_move
             )
             with self.decision_lock:
-                self.latest_decision_result = res
-                self.pending_decision = False
+                if request_epoch == self.decision_epoch:
+                    self.latest_decision_result = res
+                    self.pending_decision = False
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -314,21 +265,21 @@ class PacmanGame:
                     self.move_history.append((self.move_count, chosen_move, decision.confidence, decision.latency_ms))
 
                     if ate:
-                        self.score += 10
+                        self.score += SCORE_PELLET
                     if won:
+                        self.score += SCORE_WIN
                         self.victory = True
 
                     if collided:
+                        self.score += SCORE_DEATH
                         self.lives -= 1
                         self.collision_flash = 20
                         if self.lives <= 0:
                             self.game_over = True
                         else:
-                            # Reset entity positions in Environment and visual arena
-                            self.env.pacman_pos = list(START_POSITIONS["pacman"])
-                            self.env.ghost_positions = [list(g) for g in START_POSITIONS["ghosts"]]
-                            self.env.ghost_dirs = ["up", "up", "up"]
-                            self.env.last_move = "left"
+                            # Reset shared simulation state, including its Scatter/Chase clock.
+                            self._invalidate_pending_decision()
+                            self.env.respawn()
                             self.pacman_pos = list(self.env.pacman_pos)
                             self.ghost_positions = [list(g) for g in self.env.ghost_positions]
                             self.ghost_dirs = list(self.env.ghost_dirs)
