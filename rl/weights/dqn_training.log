@@ -50,6 +50,6 @@ Ep 1950/2000 | Train Avg(50):  530.2 | Val Score:  592.0 (Pellets: 79.2) | eps: 
 Ep 2000/2000 | Train Avg(50):  515.0 | Val Score:  606.5 (Pellets: 80.7) | eps: 0.05 | lr: 5.00e-05 | Time: 6625s
 
 ======================================================================
- TRAINING COMPLETE! Best Checkpoint Saved to C:\Users\wei.du\WorkAtTPVision\test\system_one\rl\weights\dqn_pacman.pt
+ TRAINING COMPLETE! Best Checkpoint Saved to rl/weights/dqn_pacman.pt
  Best Validation Score: 651.0 (episode 1600)
 ======================================================================

@@ -112,7 +112,7 @@ pip install -r requirements.txt
 ```
 
 > [!TIP]
-> On the development host, a pre-configured virtual environment containing all required dependencies (`torch`, `pygame-ce`, `numpy`) is located at `C:\Users\wei.du\venv\systemone` (accessible directly via `& "C:\Users\wei.du\venv\systemone\Scripts\python.exe"`).
+> The default system Python usually lacks `torch` and `pygame-ce`; always run the scripts from the virtual environment created above.
 
 ### 2. Launch the Interactive Pygame Arena
 

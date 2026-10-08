@@ -8,13 +8,13 @@
 
 ### [Fixed, originally P1] DQN input omitted variables that change transitions and rewards
 
-**Location:** [rl/dqn_model.py](/C:/Users/wei.du/WorkAtTPVision/test/system_one/rl/dqn_model.py:48), [rl/train_dqn.py](/C:/Users/wei.du/WorkAtTPVision/test/system_one/rl/train_dqn.py:57), [core/environment.py](/C:/Users/wei.du/WorkAtTPVision/test/system_one/core/environment.py:75)
+**Location:** [rl/dqn_model.py](rl/dqn_model.py:48), [rl/train_dqn.py](rl/train_dqn.py:57), [core/environment.py](core/environment.py:75)
 
 The former six-channel encoder omitted ghost identity, Scatter/Chase phase, heading, stall progress, and remaining horizon, although these affect transitions or rewards. The new 30-channel encoder represents these features and preserves each ghost's current/history position and heading. Training, validation, tournament, and UI calls now supply environment context. Stall and horizon cutoffs are terminal in replay to match the finite episodes used for scoring. Legacy checkpoints load through a first-layer channel expansion, but their policies should be retrained for the new representation.
 
 ### [Fixed, originally P2] Ghost chase distance did not account for the horizontal tunnel
 
-**Location:** [core/environment.py](/C:/Users/wei.du/WorkAtTPVision/test/system_one/core/environment.py:170)
+**Location:** [core/environment.py](core/environment.py:170)
 
 `score_ghost` ranked candidate moves using `abs(_nx - tx)`. The maze wraps horizontally, so this could prefer a route nearly one full row long over a short route through the tunnel. Predictive chase targets could also lie outside the grid, making the raw coordinate difference even less representative.
 

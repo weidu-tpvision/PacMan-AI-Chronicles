@@ -1,0 +1,6 @@
+# Store and check out text files with LF on every OS (overrides core.autocrlf,
+# which caused the "LF will be replaced by CRLF" warnings on Windows).
+* text=auto eol=lf
+
+*.pt  binary
+*.png binary

@@ -10,7 +10,7 @@ In the Double-DQN update, `policy_net(b_ns).argmax(...)` selects from all four d
 
 **Resolution:** Replay transitions now carry the next state's legal-action mask. Double-DQN action selection masks illegal Q-values before `argmax`; terminal transitions remain suppressed by the terminal flag.
 
-**Location:** [rl/train_dqn.py](/C:/Users/wei.du/WorkAtTPVision/test/system_one/rl/train_dqn.py:320)
+**Location:** [rl/train_dqn.py](rl/train_dqn.py:320)
 
 ### [Fixed, originally P2] Stall cutoff omits the documented stall penalty
 
@@ -18,7 +18,7 @@ In the Double-DQN update, `policy_net(b_ns).argmax(...)` selects from all four d
 
 **Resolution:** `compute_reward` now applies the documented `-50` penalty at the stall cutoff. Stalls remain truncations, so bootstrapping from the cutoff state is preserved.
 
-**Location:** [rl/train_dqn.py](/C:/Users/wei.du/WorkAtTPVision/test/system_one/rl/train_dqn.py:82)
+**Location:** [rl/train_dqn.py](rl/train_dqn.py:82)
 
 ### [Fixed, originally P2] Tournament runner trusts an agent's move even when it is illegal
 
@@ -26,7 +26,7 @@ The tournament counts `error_msg`, but passes `res.choice` directly to `Environm
 
 **Resolution:** The tournament now records invalid choices and errors. Known blocked directions retain the environment's counted no-op behavior; unknown choices use a deterministic legal fallback so an invalid response cannot abort the tournament.
 
-**Location:** [compare_baselines.py](/C:/Users/wei.du/WorkAtTPVision/test/system_one/compare_baselines.py:68)
+**Location:** [compare_baselines.py](compare_baselines.py:68)
 
 ### [Fixed] Pygame frontend did not parse and the collision respawn path was inconsistent
 

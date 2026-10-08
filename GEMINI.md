@@ -127,14 +127,14 @@ Rather than compressing objects into a scalar matrix where negative values colli
 ### 5. Training Diagnostic Protocol (Mandatory for Every Run)
 Every DQN training run must follow this standardized automated diagnostic workflow:
 
-1. **Per-Episode Metrics Logging**: Record `episode`, `score`, `train_avg_score`, `pellets`, `reward`, `steps`, `loss`, `epsilon`, `learning_rate`, `val_score`, and `val_pellets` in [`rl/weights/dqn_training_metrics.json`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/rl/weights/dqn_training_metrics.json) and `.csv`.
-2. **Automated Multi-Panel Figure Generation**: The training runner must execute [`rl/plot_metrics.py`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/rl/plot_metrics.py) at the end of training to generate:
-   * **Vector Dashboard**: [`rl/weights/dqn_training_figures.svg`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/rl/weights/dqn_training_figures.svg) (scalable publication quality).
-   * **Raster Dashboard**: [`rl/weights/dqn_training_figures.png`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/rl/weights/dqn_training_figures.png) (4-panel visual dashboard).
+1. **Per-Episode Metrics Logging**: Record `episode`, `score`, `train_avg_score`, `pellets`, `reward`, `steps`, `loss`, `epsilon`, `learning_rate`, `val_score`, and `val_pellets` in [`rl/weights/dqn_training_metrics.json`](rl/weights/dqn_training_metrics.json) and `.csv`.
+2. **Automated Multi-Panel Figure Generation**: The training runner must execute [`rl/plot_metrics.py`](rl/plot_metrics.py) at the end of training to generate:
+   * **Vector Dashboard**: [`rl/weights/dqn_training_figures.svg`](rl/weights/dqn_training_figures.svg) (scalable publication quality).
+   * **Raster Dashboard**: [`rl/weights/dqn_training_figures.png`](rl/weights/dqn_training_figures.png) (4-panel visual dashboard).
 3. **Artifact-Only Results**: Training conclusions (validation means, best-checkpoint episode, quartile analyses) live in the artifacts above and in commit messages — **not** in this document, so this guide can never drift from the latest run.
 
 ### 6. Standardized Simulation Engine (`core.environment.Environment`)
-* **Single Source of Truth**: All game arenas ([`pacman_game.py`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/pacman_game.py), [`web_arena.py`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/web_arena.py)), training pipelines ([`rl/train_dqn.py`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/rl/train_dqn.py), [`rl/train_q_learning.py`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/rl/train_q_learning.py), [`rl/optimize_policy.py`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/rl/optimize_policy.py)), and tournament runners ([`compare_baselines.py`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/compare_baselines.py)) share the exact same `core.environment.Environment` engine.
+* **Single Source of Truth**: All game arenas ([`pacman_game.py`](pacman_game.py), [`web_arena.py`](web_arena.py)), training pipelines ([`rl/train_dqn.py`](rl/train_dqn.py), [`rl/train_q_learning.py`](rl/train_q_learning.py), [`rl/optimize_policy.py`](rl/optimize_policy.py)), and tournament runners ([`compare_baselines.py`](compare_baselines.py)) share the exact same `core.environment.Environment` engine.
 * **Arcade Scatter / Chase Dynamics**: Ghosts cycle between 28 steps in Chase Mode (direct pursuit, ambush, flanking) and 7 steps in Scatter Mode (heading to designated home corners), faithfully replicating Namco 1980 arcade behavior and naturally shattering static phase-locked stalemates.
 * **Seeded Reproducibility**: Each environment instance uses an isolated `self.rng = random.Random(seed)` with subtle ($10\%$) junction exploration noise, guaranteeing that tournament benchmarks evaluate diverse, realistic game trajectories across seeds while remaining fully reproducible.
 * **Episodic & Life-Loss Reset**: When Pac-Man loses a life or resets, calling `agent.reset()` immediately purges temporal velocity buffers, preventing corrupted post-respawn momentum vectors.
@@ -144,19 +144,19 @@ Every DQN training run must follow this standardized automated diagnostic workfl
 > [!IMPORTANT]
 > **Pre-Configured Virtual Environment**:
 > All project runtime dependencies (`torch`, `pygame-ce`, `numpy`) are installed and maintained in the dedicated virtual environment located at:
-> * **Path**: `C:\Users\wei.du\venv\systemone` (or `$HOME\venv\systemone`)
-> * **Interpreter**: `C:\Users\wei.du\venv\systemone\Scripts\python.exe`
+> * **Path**: `$HOME\venv\systemone`
+> * **Interpreter**: `$HOME\venv\systemone\Scripts\python.exe`
 >
 > **Caution**: The system's default global Python (`AppData\Local\Microsoft\WindowsApps\python.exe` / Python 3.14) lacks `torch` and `pygame`. Always run scripts using the `systemone` virtual environment to prevent `ModuleNotFoundError`.
 >
 > **Usage Options**:
 > * **Direct PowerShell execution**:
 >   ```powershell
->   & "C:\Users\wei.du\venv\systemone\Scripts\python.exe" tests/test_agents.py
+>   & "$HOME\venv\systemone\Scripts\python.exe" tests/test_agents.py
 >   ```
 > * **Shell Activation**:
 >   ```powershell
->   & "C:\Users\wei.du\venv\systemone\Scripts\Activate.ps1"
+>   & "$HOME\venv\systemone\Scripts\Activate.ps1"
 >   python tests/test_agents.py
 >   ```
 
@@ -192,7 +192,7 @@ python web_arena.py         # Browser-based visualizer (auto-opens Chrome/Edge, 
 
 ## 📐 Agent Contract (`AgentProtocol`)
 
-All agents implement the unified interface in [`agents/base.py`](file:///c:/Users/wei.du/WorkAtTPVision/test/system_one/agents/base.py):
+All agents implement the unified interface in [`agents/base.py`](agents/base.py):
 
 ```python
 class AgentProtocol(Protocol):

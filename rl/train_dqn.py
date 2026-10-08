@@ -443,7 +443,8 @@ def train_dqn(
             })
 
         log_print("\n======================================================================")
-        log_print(f" TRAINING COMPLETE! Best Checkpoint Saved to {save_path}")
+        # Relative path: the log is a committed artifact and must not embed local directories
+        log_print(f" TRAINING COMPLETE! Best Checkpoint Saved to {os.path.relpath(save_path)}")
         log_print(f" Best Validation Score: {best_val_score:.1f} (episode {best_val_episode})")
         log_print("======================================================================")
 
