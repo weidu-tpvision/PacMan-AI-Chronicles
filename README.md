@@ -92,7 +92,7 @@ In classical reinforcement learning, policy search methods (such as the Cross-En
 - [x] **Prioritized Experience Replay (PER)**: Replay transitions by TD-error priority with annealed importance-sampling correction.
 - [x] **Dueling DQN Architecture**: Separate state value $V(s)$ and action advantages $A(s, a)$; inference remains compatible with legacy checkpoints.
 - [ ] **Extended Training Run**: Longer runs with cosine learning-rate scheduling; compare best-checkpoint validation means against the feature-based agents on identical seeds before updating the shipped checkpoint.
-- [ ] **Training Resume Support**: the trainer starts from fresh weights and saves only the best model state; resuming needs a full checkpoint format (optimizer, replay buffer, scheduler, exploration, counters, RNG state).
+- [x] **Training Resume Support**: full training-state checkpoints (periodic, `--stop-after`, Ctrl+C) and exact `--resume` (see Quickstart).
 
 ### Open Issues
 - **Retrain all learned policies.** The collision rule was corrected (Pac-Man stepping onto a ghost's tile is a hit even if that ghost moves away). The shipped DQN checkpoint and the CEM / TD weights predate this, so their tournament scores are provisional until retrained and the tournament is regenerated.
@@ -156,6 +156,19 @@ python rl/train_q_learning.py
 
 Default hyperparameters live in each script (`--help` lists the overridable ones); they are working values, not tuned or final.
 
+#### Resuming long DQN runs
+DQN training writes a full training-state checkpoint (`rl/weights/dqn_training_state.pt`: networks, optimizer, LR schedule, replay buffer, exploration, counters, metrics and RNG streams) every `--checkpoint-every` episodes and when you press **Ctrl+C**.
+
+```bash
+python rl/train_dqn.py --stop-after 300   # train in sessions: run 300 episodes, checkpoint, exit
+python rl/train_dqn.py --resume           # continue where the last session (or Ctrl+C) stopped
+```
+
+- `--resume` reuses the checkpoint's hyperparameters, so passing `--episodes`, `--lr`, etc. alongside it is rejected.
+- Resuming from a periodic or `--stop-after` checkpoint reproduces the uninterrupted run exactly. A Ctrl+C checkpoint also keeps the interrupted episode's partial experience, so the result can differ slightly.
+- The state file holds the whole replay buffer (up to roughly 2 GB). It is git-ignored and deleted automatically once the run completes; `dqn_pacman.pt` (best validated model) is what the agents load.
+- For a run trained with a custom `--save-path`, pass the state file explicitly: `--resume --checkpoint-path <dir>/dqn_training_state.pt`.
+
 ### 5. Run the Automated Test Suite
 
 ```bash
@@ -218,6 +231,7 @@ PacMan-AI-Chronicles/
 │   ├── test_agents.py           # Multi-agent decision verification test
 │   ├── test_environment.py      # Scatter/Chase clock, collision rule, tunnel wrap
 │   ├── test_facades.py          # Root compatibility facades
+│   ├── test_train_resume.py     # Exact DQN stop/resume, Ctrl+C checkpoints
 │   ├── test_system_one.py       # Ollama schema & response verification test
 │   └── test_review_regressions.py # Regression coverage for previously fixed bugs
 │

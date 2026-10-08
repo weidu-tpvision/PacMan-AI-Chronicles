@@ -75,6 +75,7 @@ system_one/
 │   ├── test_agents.py           # Agent instantiation and decision verification
 │   ├── test_environment.py      # Scatter/Chase clock, collision rule, tunnel wrap
 │   ├── test_facades.py          # Root compatibility facades
+│   ├── test_train_resume.py     # Exact DQN stop/resume, Ctrl+C checkpoints
 │   ├── test_system_one.py       # Schema and fallback verification
 │   └── test_review_regressions.py # Regression coverage for previously fixed bugs
 │
@@ -183,6 +184,7 @@ python compare_baselines.py --offline     # options: --help
 
 # 3. Train DQN (defaults in rl/train_dqn.py; options: --help)
 python rl/train_dqn.py
+python rl/train_dqn.py --resume      # continue an interrupted / --stop-after run
 
 # 4. Generate Training Diagnostic Figures (PNG & SVG)
 python rl/plot_metrics.py

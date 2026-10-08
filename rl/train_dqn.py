@@ -10,6 +10,9 @@ Implements:
 - Momentum-preserving reward shaping (reversal penalty) and anti-stall truncation
 - Fully seeded runs with disjoint TRAIN / VAL seed ranges (core.seeds)
 - Model checkpointing to rl/weights/dqn_pacman.pt (selected on the *pure greedy* policy)
+- Resumable training: a full training-state checkpoint (networks, optimizer, LR schedule,
+  replay buffer, exploration, counters, metrics, RNG streams) is written every
+  `checkpoint_every` episodes, on --stop-after and on Ctrl+C; continue with --resume.
 """
 
 from __future__ import annotations
@@ -44,6 +47,8 @@ from rl.dqn_model import ACTION_TO_IDX, NUM_CHANNELS, PacmanDQN, encode_state
 
 DEFAULT_WEIGHTS_DIR = os.path.join(os.path.dirname(__file__), "weights")
 DEFAULT_MODEL_PATH = os.path.join(DEFAULT_WEIGHTS_DIR, "dqn_pacman.pt")
+TRAINING_STATE_NAME = "dqn_training_state.pt"
+TRAINING_STATE_VERSION = 1
 
 # Reward shaping constants
 R_STEP = -0.5
@@ -106,51 +111,59 @@ def masked_next_actions(q_values: torch.Tensor, legal_action_masks: torch.Tensor
 class ReplayBuffer:
     """Proportional prioritized replay with importance-sampling correction.
 
-    States are stored as float16: the 26 binary channels are exact in fp16 and the 4
-    scalar planes keep ~3 decimal digits (ample for stall/horizon/cycle features),
-    halving buffer RAM (~3.6 GiB -> ~1.8 GiB at 40k capacity). sample() upcasts to
-    float32 tensors.
+    Transitions live in preallocated ring arrays (allocated on the first push, once the
+    state shape is known). States are stored as float16: the binary channels are exact
+    in fp16 and the scalar planes keep ~3 decimal digits (ample for stall/horizon/cycle
+    features), halving buffer RAM. sample() upcasts to float32 tensors. The arrays also
+    make state_dict() a zero-copy snapshot for resumable training checkpoints.
     """
     def __init__(self, capacity: int = 40000, rng: Optional[random.Random] = None, alpha: float = 0.6, priority_epsilon: float = 1e-5):
         self.capacity = capacity
-        self.buffer = []
         self.priorities = np.zeros(capacity, dtype=np.float32)
         self.rng = rng or random.Random()
         self.alpha = alpha
         self.priority_epsilon = priority_epsilon
         self.position = 0
+        self.size = 0
         self.max_priority = 1.0  # new transitions get the highest priority seen so far
+        self.states = self.next_states = None
+        self.actions = np.zeros(capacity, dtype=np.int64)
+        self.rewards = np.zeros(capacity, dtype=np.float32)
+        self.dones = np.zeros(capacity, dtype=np.float32)
+        self.next_action_masks = np.ones((capacity, len(ACTION_TO_IDX)), dtype=np.bool_)
+
+    def _allocate(self, state_shape):
+        self.states = np.zeros((self.capacity, *state_shape), dtype=np.float16)
+        self.next_states = np.zeros((self.capacity, *state_shape), dtype=np.float16)
 
     def push(self, state, action_idx, reward, next_state, done, next_action_mask=None):
-        if next_action_mask is None:
-            next_action_mask = np.ones(len(ACTION_TO_IDX), dtype=np.bool_)
-        item = (
-            np.asarray(state, dtype=np.float16), action_idx, reward,
-            np.asarray(next_state, dtype=np.float16), done, next_action_mask,
-        )
-        if len(self.buffer) < self.capacity:
-            self.buffer.append(item)
-        else:
-            self.buffer[self.position] = item
-        self.priorities[self.position] = self.max_priority
-        self.position = (self.position + 1) % self.capacity
+        if self.states is None:
+            self._allocate(np.shape(state))
+        i = self.position
+        self.states[i] = state
+        self.next_states[i] = next_state
+        self.actions[i] = action_idx
+        self.rewards[i] = reward
+        self.dones[i] = done
+        self.next_action_masks[i] = True if next_action_mask is None else next_action_mask
+        self.priorities[i] = self.max_priority
+        self.position = (i + 1) % self.capacity
+        self.size = min(self.size + 1, self.capacity)
 
     def sample(self, batch_size: int, beta: float = 0.4):
-        priorities = self.priorities[:len(self.buffer)]
+        priorities = self.priorities[:self.size]
         scaled = priorities ** self.alpha
         probabilities = scaled / scaled.sum()
-        indices = self.rng.choices(range(len(self.buffer)), weights=probabilities, k=batch_size)
-        batch = [self.buffer[i] for i in indices]
-        states, actions, rewards, next_states, dones, next_action_masks = zip(*batch)
-        weights = (len(self.buffer) * probabilities[indices]) ** (-beta)
+        indices = self.rng.choices(range(self.size), weights=probabilities, k=batch_size)
+        weights = (self.size * probabilities[indices]) ** (-beta)
         weights /= weights.max()
 
-        states_t = torch.tensor(np.array(states), dtype=torch.float32)
-        actions_t = torch.tensor(actions, dtype=torch.int64).unsqueeze(1)
-        rewards_t = torch.tensor(rewards, dtype=torch.float32).unsqueeze(1)
-        next_states_t = torch.tensor(np.array(next_states), dtype=torch.float32)
-        dones_t = torch.tensor(dones, dtype=torch.float32).unsqueeze(1)
-        next_action_masks_t = torch.tensor(np.array(next_action_masks), dtype=torch.bool)
+        states_t = torch.from_numpy(self.states[indices].astype(np.float32))
+        actions_t = torch.from_numpy(self.actions[indices]).unsqueeze(1)
+        rewards_t = torch.from_numpy(self.rewards[indices]).unsqueeze(1)
+        next_states_t = torch.from_numpy(self.next_states[indices].astype(np.float32))
+        dones_t = torch.from_numpy(self.dones[indices]).unsqueeze(1)
+        next_action_masks_t = torch.from_numpy(self.next_action_masks[indices])
 
         weights_t = torch.tensor(weights, dtype=torch.float32).unsqueeze(1)
         return states_t, actions_t, rewards_t, next_states_t, dones_t, next_action_masks_t, indices, weights_t
@@ -161,8 +174,74 @@ class ReplayBuffer:
             self.priorities[index] = priority
             self.max_priority = max(self.max_priority, priority)
 
+    def state_dict(self) -> dict:
+        """Tensor snapshot of the filled part of the buffer (shares memory, no copy)."""
+        n = self.size
+        state = {
+            "capacity": self.capacity, "alpha": self.alpha, "priority_epsilon": self.priority_epsilon,
+            "position": self.position, "size": n, "max_priority": self.max_priority,
+            "priorities": torch.from_numpy(self.priorities[:n]),
+            "actions": torch.from_numpy(self.actions[:n]),
+            "rewards": torch.from_numpy(self.rewards[:n]),
+            "dones": torch.from_numpy(self.dones[:n]),
+            "next_action_masks": torch.from_numpy(self.next_action_masks[:n]),
+        }
+        if self.states is not None:
+            state["states"] = torch.from_numpy(self.states[:n])
+            state["next_states"] = torch.from_numpy(self.next_states[:n])
+        return state
+
+    def load_state_dict(self, state: dict) -> None:
+        if state["capacity"] != self.capacity:
+            raise ValueError(f"replay capacity mismatch: checkpoint {state['capacity']} vs buffer {self.capacity}")
+        n = state["size"]
+        self.alpha = state["alpha"]
+        self.priority_epsilon = state["priority_epsilon"]
+        self.position = state["position"]
+        self.size = n
+        self.max_priority = state["max_priority"]
+        self.priorities[:n] = state["priorities"].numpy()
+        self.actions[:n] = state["actions"].numpy()
+        self.rewards[:n] = state["rewards"].numpy()
+        self.dones[:n] = state["dones"].numpy()
+        self.next_action_masks[:n] = state["next_action_masks"].numpy()
+        if "states" in state:
+            self._allocate(tuple(state["states"].shape[1:]))
+            self.states[:n] = state["states"].numpy()
+            self.next_states[:n] = state["next_states"].numpy()
+
     def __len__(self):
-        return len(self.buffer)
+        return self.size
+
+
+def _atomic_torch_save(obj, path: str) -> None:
+    """Write via a temp file + rename so an interrupted save never corrupts `path`."""
+    tmp_path = path + ".tmp"
+    torch.save(obj, tmp_path)
+    os.replace(tmp_path, path)
+
+
+def _rng_snapshot(rng: random.Random) -> dict:
+    """All RNG streams the trainer consumes, as weights_only-loadable primitives."""
+    np_name, np_keys, np_pos, np_has_gauss, np_gauss = np.random.get_state()
+    return {
+        "trainer": rng.getstate(),
+        "python": random.getstate(),
+        "numpy": (np_name, np_keys.tolist(), np_pos, np_has_gauss, np_gauss),
+        "torch": torch.get_rng_state(),
+    }
+
+
+def _rng_restore(rng: random.Random, snap: dict) -> None:
+    rng.setstate(snap["trainer"])
+    random.setstate(snap["python"])
+    np_name, np_keys, np_pos, np_has_gauss, np_gauss = snap["numpy"]
+    np.random.set_state((np_name, np.array(np_keys, dtype=np.uint32), np_pos, np_has_gauss, np_gauss))
+    torch.set_rng_state(snap["torch"])
+
+
+def default_training_state_path(save_path: str = DEFAULT_MODEL_PATH) -> str:
+    return os.path.join(os.path.dirname(os.path.abspath(save_path)), TRAINING_STATE_NAME)
 
 
 def evaluate_dqn(policy_net: nn.Module, episodes: int = 15, max_steps: int = DEFAULT_MAX_STEPS) -> Tuple[float, float]:
@@ -226,10 +305,49 @@ def train_dqn(
     seed: int = 0,
     save_path: str = DEFAULT_MODEL_PATH,
     make_plots: bool = True,
+    buffer_capacity: int = 40000,
+    checkpoint_every: int = 100,
+    checkpoint_path: Optional[str] = None,
+    resume: bool = False,
+    stop_after: Optional[int] = None,
 ):
+    """Train (or resume training) the DQN.
+
+    Resumable runs: a training-state checkpoint (`checkpoint_path`, default
+    rl/weights/dqn_training_state.pt) is written every `checkpoint_every` episodes, after
+    `stop_after` episodes of this session, and on Ctrl+C. With `resume=True` the run
+    continues from it using the *checkpointed* hyperparameters (the arguments above are
+    ignored except `checkpoint_path`, `stop_after`, `checkpoint_every` and `make_plots`).
+    Resuming from a periodic or --stop-after checkpoint reproduces the uninterrupted
+    run exactly; a Ctrl+C checkpoint also keeps the interrupted episode's partial
+    experience and updates. The state file is deleted once the run completes.
+    """
     if not TORCH_AVAILABLE:
         print("[ERROR] PyTorch is required to train DQN.")
         return None
+
+    checkpoint_path = checkpoint_path or default_training_state_path(save_path)
+    ckpt = None
+    if resume:
+        if not os.path.exists(checkpoint_path):
+            raise FileNotFoundError(f"No training state to resume at {checkpoint_path}")
+        ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+        if ckpt.get("version") != TRAINING_STATE_VERSION:
+            raise ValueError(f"Unsupported training state version {ckpt.get('version')!r} in {checkpoint_path}")
+        cfg = ckpt["config"]
+        episodes, lr, batch_size, gamma = cfg["episodes"], cfg["lr"], cfg["batch_size"], cfg["gamma"]
+        epsilon_start, epsilon_min, epsilon_decay = cfg["epsilon_start"], cfg["epsilon_min"], cfg["epsilon_decay"]
+        per_beta_start, target_update_steps = cfg["per_beta_start"], cfg["target_update_steps"]
+        warmup_steps, max_steps, val_every, val_episodes = cfg["warmup_steps"], cfg["max_steps"], cfg["val_every"], cfg["val_episodes"]
+        seed, save_path, buffer_capacity = cfg["seed"], cfg["save_path"], cfg["buffer_capacity"]
+
+    config = {
+        "episodes": episodes, "lr": lr, "batch_size": batch_size, "gamma": gamma,
+        "epsilon_start": epsilon_start, "epsilon_min": epsilon_min, "epsilon_decay": epsilon_decay,
+        "per_beta_start": per_beta_start, "target_update_steps": target_update_steps,
+        "warmup_steps": warmup_steps, "max_steps": max_steps, "val_every": val_every,
+        "val_episodes": val_episodes, "seed": seed, "save_path": save_path, "buffer_capacity": buffer_capacity,
+    }
 
     seed_everything(seed)
     rng = random.Random(seed)
@@ -248,201 +366,274 @@ def train_dqn(
 
     optimizer = optim.Adam(policy_net.parameters(), lr=lr)
     lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(1, episodes), eta_min=lr * 0.1)
-    replay_buffer = ReplayBuffer(capacity=40000, rng=rng)
+    replay_buffer = ReplayBuffer(capacity=buffer_capacity, rng=rng)
 
     metrics_history = []
     best_val_score = -float("inf")
     best_val_episode = None
+    epsilon = epsilon_start
+    total_steps = 0
+    start_episode = 0
+    elapsed_before = 0.0
+    recent_scores = collections.deque(maxlen=50)
 
-    with open(log_path, "w", encoding="utf-8", newline="\n") as log_file:
+    if ckpt is not None:
+        policy_net.load_state_dict(ckpt["policy_net"])
+        target_net.load_state_dict(ckpt["target_net"])
+        optimizer.load_state_dict(ckpt["optimizer"])
+        lr_scheduler.load_state_dict(ckpt["lr_scheduler"])
+        replay_buffer.load_state_dict(ckpt["replay_buffer"])
+        prog = ckpt["progress"]
+        start_episode, total_steps, epsilon = prog["episodes_done"], prog["total_steps"], prog["epsilon"]
+        best_val_score, best_val_episode = prog["best_val_score"], prog["best_val_episode"]
+        elapsed_before = prog["elapsed_sec"]
+        recent_scores.extend(prog["recent_scores"])
+        metrics_history = list(ckpt["metrics_history"])
+        _rng_restore(rng, ckpt["rng"])
+        ckpt = None  # release the (large) loaded buffer tensors
+
+    def export_metrics():
+        with open(json_path, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(metrics_history, f, indent=2)
+        if metrics_history:
+            with open(csv_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=list(metrics_history[0].keys()), lineterminator="\n")
+                writer.writeheader()
+                writer.writerows(metrics_history)
+
+    def save_training_state(episodes_done: int, elapsed_sec: float):
+        _atomic_torch_save({
+            "version": TRAINING_STATE_VERSION,
+            "config": config,
+            "policy_net": policy_net.state_dict(),
+            "target_net": target_net.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "lr_scheduler": lr_scheduler.state_dict(),
+            "replay_buffer": replay_buffer.state_dict(),
+            "progress": {
+                "episodes_done": episodes_done, "total_steps": total_steps, "epsilon": epsilon,
+                "best_val_score": best_val_score, "best_val_episode": best_val_episode,
+                "elapsed_sec": elapsed_sec, "recent_scores": list(recent_scores),
+            },
+            "metrics_history": metrics_history,
+            "rng": _rng_snapshot(rng),
+        }, checkpoint_path)
+        export_metrics()
+
+    with open(log_path, "a" if start_episode else "w", encoding="utf-8", newline="\n") as log_file:
 
         def log_print(msg: str = ""):
             print(msg, flush=True)
             log_file.write(msg + "\n")
             log_file.flush()
 
-        log_print("======================================================================")
-        log_print(f" DEEP Q-NETWORK (DQN) TRAINING: {NUM_CHANNELS}-Channel State Encoder")
-        log_print("======================================================================")
-        log_print(f"Device: {device} | Batch Size: {batch_size} | Learning Rate: {lr} | Seed: {seed}")
-        log_print(f"Episodes: {episodes} | Horizon: {max_steps} | Target Sync: every {target_update_steps} steps")
-        log_print(f"Validation: {val_episodes} VAL seeds every {val_every} episodes (pure greedy policy)\n")
-        log_print(f"Warming up replay buffer with {warmup_steps:,} random-policy steps...")
+        if start_episode:
+            log_print(f"\n[RESUME] Continuing from episode {start_episode}/{episodes} "
+                      f"({os.path.relpath(checkpoint_path)}, {len(replay_buffer):,} replay transitions)\n")
+        else:
+            log_print("======================================================================")
+            log_print(f" DEEP Q-NETWORK (DQN) TRAINING: {NUM_CHANNELS}-Channel State Encoder")
+            log_print("======================================================================")
+            log_print(f"Device: {device} | Batch Size: {batch_size} | Learning Rate: {lr} | Seed: {seed}")
+            log_print(f"Episodes: {episodes} | Horizon: {max_steps} | Target Sync: every {target_update_steps} steps")
+            log_print(f"Validation: {val_episodes} VAL seeds every {val_every} episodes (pure greedy policy)")
+            log_print(f"Training state: {os.path.relpath(checkpoint_path)} every {checkpoint_every} episodes\n")
+            log_print(f"Warming up replay buffer with {warmup_steps:,} random-policy steps...")
 
-        # ---- Warm-up phase (uniform random policy) ----
-        env = Environment(seed=train_seed(rng))
-        prev_p = prev_g = None
-        no_pellet = 0
-        for _ in range(warmup_steps):
-            legal = env.get_legal_moves(*env.pacman_pos)
-            curr_p = tuple(env.pacman_pos)
-            curr_g = [tuple(g) for g in env.ghost_positions]
-            s = encode_state(
-                curr_p, curr_g, env.pellets, prev_p, prev_g, last_move=env.last_move,
-                ghost_dirs=env.ghost_dirs, mode_step=env.mode_step,
-                steps_without_pellet=env.steps_without_pellet,
-                steps_remaining=max(0, max_steps - env.step_count), horizon=max_steps,
-            )
-
-            m = rng.choice(legal)
-            prev_move = env.last_move
-            col, ate, won = env.step(m)
-            no_pellet = 0 if ate else no_pellet + 1
-            r, stalled = compute_reward(prev_move, m, ate, col, won, len(legal), no_pellet)
-
-            ns = encode_state(
-                tuple(env.pacman_pos), [tuple(g) for g in env.ghost_positions], env.pellets, curr_p, curr_g,
-                last_move=env.last_move, ghost_dirs=env.ghost_dirs, mode_step=env.mode_step,
-                steps_without_pellet=env.steps_without_pellet,
-                steps_remaining=max(0, max_steps - env.step_count), horizon=max_steps,
-            )
-            next_legal = env.get_legal_moves(*env.pacman_pos)
-            next_mask = np.array([a in next_legal for a in ACTION_TO_IDX], dtype=np.bool_)
-            if not next_mask.any():
-                next_mask[:] = True
-            replay_buffer.push(s, ACTION_TO_IDX[m], r, ns, float(col or won or stalled or env.step_count >= max_steps), next_mask)
-            prev_p, prev_g = curr_p, curr_g
-
-            if col or won or stalled or env.step_count >= max_steps:
-                env = Environment(seed=train_seed(rng))
-                prev_p = prev_g = None
-                no_pellet = 0
-
-        log_print("Warm-up complete! Beginning DQN neural optimization...\n")
-
-        epsilon = epsilon_start
-        total_steps = 0
-        t0 = time.time()
-        recent_scores = collections.deque(maxlen=50)
-
-        for ep in range(episodes):
+            # ---- Warm-up phase (uniform random policy) ----
             env = Environment(seed=train_seed(rng))
-            ep_reward = 0.0
-            pellets_eaten = 0
-            collided = won = False
-            steps_without_pellet = 0
             prev_p = prev_g = None
-            ep_losses = []
-            steps = 0
-
-            for steps in range(1, max_steps + 1):
-                total_steps += 1
+            no_pellet = 0
+            for _ in range(warmup_steps):
                 legal = env.get_legal_moves(*env.pacman_pos)
                 curr_p = tuple(env.pacman_pos)
                 curr_g = [tuple(g) for g in env.ghost_positions]
                 s = encode_state(
                     curr_p, curr_g, env.pellets, prev_p, prev_g, last_move=env.last_move,
                     ghost_dirs=env.ghost_dirs, mode_step=env.mode_step,
-                    steps_without_pellet=steps_without_pellet,
-                    steps_remaining=max_steps - steps + 1, horizon=max_steps,
+                    steps_without_pellet=env.steps_without_pellet,
+                    steps_remaining=max(0, max_steps - env.step_count), horizon=max_steps,
                 )
 
-                # Epsilon-greedy action selection over the raw network
-                if rng.random() < epsilon:
-                    m = rng.choice(legal)
-                else:
-                    m = greedy_action(policy_net, s, legal)
-
-                prev_move = env.last_move  # heading BEFORE the step (fixes dead reversal penalty)
+                m = rng.choice(legal)
+                prev_move = env.last_move
                 col, ate, won = env.step(m)
-                if ate:
-                    pellets_eaten += 1
-                    steps_without_pellet = 0
-                else:
-                    steps_without_pellet += 1
-                collided = col
-
-                r, stalled = compute_reward(prev_move, m, ate, col, won, len(legal), steps_without_pellet)
-                ep_reward += r
+                no_pellet = 0 if ate else no_pellet + 1
+                r, stalled = compute_reward(prev_move, m, ate, col, won, len(legal), no_pellet)
 
                 ns = encode_state(
                     tuple(env.pacman_pos), [tuple(g) for g in env.ghost_positions], env.pellets, curr_p, curr_g,
                     last_move=env.last_move, ghost_dirs=env.ghost_dirs, mode_step=env.mode_step,
-                    steps_without_pellet=steps_without_pellet,
-                    steps_remaining=max_steps - steps, horizon=max_steps,
+                    steps_without_pellet=env.steps_without_pellet,
+                    steps_remaining=max(0, max_steps - env.step_count), horizon=max_steps,
                 )
-                terminal = col or won or stalled or steps >= max_steps
                 next_legal = env.get_legal_moves(*env.pacman_pos)
                 next_mask = np.array([a in next_legal for a in ACTION_TO_IDX], dtype=np.bool_)
                 if not next_mask.any():
                     next_mask[:] = True
-                replay_buffer.push(s, ACTION_TO_IDX[m], r, ns, float(terminal), next_mask)
+                replay_buffer.push(s, ACTION_TO_IDX[m], r, ns, float(col or won or stalled or env.step_count >= max_steps), next_mask)
                 prev_p, prev_g = curr_p, curr_g
 
-                # Sample batch & optimize
-                if len(replay_buffer) >= batch_size:
-                    beta = min(1.0, per_beta_start + (1.0 - per_beta_start) * total_steps / max(1, episodes * max_steps))
-                    b_s, b_a, b_r, b_ns, b_d, b_next_mask, indices, is_weights = replay_buffer.sample(batch_size, beta)
-                    curr_q = policy_net(b_s).gather(1, b_a)
+                if col or won or stalled or env.step_count >= max_steps:
+                    env = Environment(seed=train_seed(rng))
+                    prev_p = prev_g = None
+                    no_pellet = 0
 
-                    # Double DQN target computation
-                    with torch.no_grad():
-                        best_next_actions = masked_next_actions(policy_net(b_ns), b_next_mask)
-                        next_target_q = target_net(b_ns).gather(1, best_next_actions)
-                        expected_q = b_r + gamma * next_target_q * (1.0 - b_d)
+            log_print("Warm-up complete! Beginning DQN neural optimization...\n")
 
-                    td_errors = expected_q - curr_q
-                    per_item_loss = nn.functional.smooth_l1_loss(curr_q, expected_q, reduction="none")
-                    loss = (is_weights * per_item_loss).mean()
-                    replay_buffer.update_priorities(indices, td_errors.detach().squeeze(1).cpu().numpy())
-                    ep_losses.append(loss.item())
+        t0 = time.time() - elapsed_before
+        session_end = episodes if stop_after is None else min(episodes, start_episode + max(0, stop_after))
+        try:
+            for ep in range(start_episode, session_end):
+                env = Environment(seed=train_seed(rng))
+                ep_reward = 0.0
+                pellets_eaten = 0
+                collided = won = False
+                steps_without_pellet = 0
+                prev_p = prev_g = None
+                ep_losses = []
+                steps = 0
 
-                    optimizer.zero_grad()
-                    loss.backward()
-                    torch.nn.utils.clip_grad_norm_(policy_net.parameters(), max_norm=5.0)
-                    optimizer.step()
+                for steps in range(1, max_steps + 1):
+                    total_steps += 1
+                    legal = env.get_legal_moves(*env.pacman_pos)
+                    curr_p = tuple(env.pacman_pos)
+                    curr_g = [tuple(g) for g in env.ghost_positions]
+                    s = encode_state(
+                        curr_p, curr_g, env.pellets, prev_p, prev_g, last_move=env.last_move,
+                        ghost_dirs=env.ghost_dirs, mode_step=env.mode_step,
+                        steps_without_pellet=steps_without_pellet,
+                        steps_remaining=max_steps - steps + 1, horizon=max_steps,
+                    )
 
-                # Target network synchronization
-                if total_steps % target_update_steps == 0:
-                    target_net.load_state_dict(policy_net.state_dict())
+                    # Epsilon-greedy action selection over the raw network
+                    if rng.random() < epsilon:
+                        m = rng.choice(legal)
+                    else:
+                        m = greedy_action(policy_net, s, legal)
 
-                if terminal or stalled:
-                    break
+                    prev_move = env.last_move  # heading BEFORE the step (fixes dead reversal penalty)
+                    col, ate, won = env.step(m)
+                    if ate:
+                        pellets_eaten += 1
+                        steps_without_pellet = 0
+                    else:
+                        steps_without_pellet += 1
+                    collided = col
 
-            # Decay exploration
-            epsilon = max(epsilon_min, epsilon * epsilon_decay)
-            lr_scheduler.step()
-            current_lr = optimizer.param_groups[0]["lr"]
+                    r, stalled = compute_reward(prev_move, m, ate, col, won, len(legal), steps_without_pellet)
+                    ep_reward += r
 
-            score = pellets_eaten * SCORE_PELLET + (SCORE_DEATH if collided else 0) + (SCORE_WIN if won else 0)
-            recent_scores.append(score)
-            avg_rec = statistics.mean(recent_scores)
-            avg_loss = statistics.mean(ep_losses) if ep_losses else 0.0
+                    ns = encode_state(
+                        tuple(env.pacman_pos), [tuple(g) for g in env.ghost_positions], env.pellets, curr_p, curr_g,
+                        last_move=env.last_move, ghost_dirs=env.ghost_dirs, mode_step=env.mode_step,
+                        steps_without_pellet=steps_without_pellet,
+                        steps_remaining=max_steps - steps, horizon=max_steps,
+                    )
+                    terminal = col or won or stalled or steps >= max_steps
+                    next_legal = env.get_legal_moves(*env.pacman_pos)
+                    next_mask = np.array([a in next_legal for a in ACTION_TO_IDX], dtype=np.bool_)
+                    if not next_mask.any():
+                        next_mask[:] = True
+                    replay_buffer.push(s, ACTION_TO_IDX[m], r, ns, float(terminal), next_mask)
+                    prev_p, prev_g = curr_p, curr_g
 
-            val_sc = val_pel = None
-            if (ep + 1) % val_every == 0 or ep + 1 == episodes:
-                # Validation re-seeds the global RNG; preserve the training stream afterwards.
-                py_state, np_state, torch_state = random.getstate(), np.random.get_state(), torch.get_rng_state()
-                val_sc, val_pel = evaluate_dqn(policy_net, episodes=val_episodes, max_steps=max_steps)
-                random.setstate(py_state); np.random.set_state(np_state); torch.set_rng_state(torch_state)
+                    # Sample batch & optimize
+                    if len(replay_buffer) >= batch_size:
+                        beta = min(1.0, per_beta_start + (1.0 - per_beta_start) * total_steps / max(1, episodes * max_steps))
+                        b_s, b_a, b_r, b_ns, b_d, b_next_mask, indices, is_weights = replay_buffer.sample(batch_size, beta)
+                        curr_q = policy_net(b_s).gather(1, b_a)
 
-                mark = ""
-                if val_sc > best_val_score:
-                    best_val_score = val_sc
-                    best_val_episode = ep + 1
-                    torch.save(policy_net.state_dict(), save_path)
-                    mark = " [* SAVED BEST]"
+                        # Double DQN target computation
+                        with torch.no_grad():
+                            best_next_actions = masked_next_actions(policy_net(b_ns), b_next_mask)
+                            next_target_q = target_net(b_ns).gather(1, best_next_actions)
+                            expected_q = b_r + gamma * next_target_q * (1.0 - b_d)
 
-                log_print(
-                    f"Ep {ep+1:04d}/{episodes} | Train Avg(50): {avg_rec:6.1f} | "
-                    f"Val Score: {val_sc:6.1f} (Pellets: {val_pel:4.1f}) | "
-                    f"eps: {epsilon:4.2f} | lr: {current_lr:.2e} | Time: {time.time() - t0:4.0f}s{mark}"
-                )
+                        td_errors = expected_q - curr_q
+                        per_item_loss = nn.functional.smooth_l1_loss(curr_q, expected_q, reduction="none")
+                        loss = (is_weights * per_item_loss).mean()
+                        replay_buffer.update_priorities(indices, td_errors.detach().squeeze(1).cpu().numpy())
+                        ep_losses.append(loss.item())
 
-            metrics_history.append({
-                "episode": ep + 1,
-                "score": score,
-                "train_avg_score": round(avg_rec, 1),
-                "pellets": pellets_eaten,
-                "reward": round(ep_reward, 1),
-                "steps": steps,
-                "collided": collided,
-                "loss": round(avg_loss, 4),
-                "epsilon": round(epsilon, 4),
-                "learning_rate": current_lr,
-                "val_score": round(val_sc, 1) if val_sc is not None else None,
-                "val_pellets": round(val_pel, 1) if val_pel is not None else None,
-            })
+                        optimizer.zero_grad()
+                        loss.backward()
+                        torch.nn.utils.clip_grad_norm_(policy_net.parameters(), max_norm=5.0)
+                        optimizer.step()
+
+                    # Target network synchronization
+                    if total_steps % target_update_steps == 0:
+                        target_net.load_state_dict(policy_net.state_dict())
+
+                    if terminal:
+                        break
+
+                # Decay exploration
+                epsilon = max(epsilon_min, epsilon * epsilon_decay)
+                lr_scheduler.step()
+                current_lr = optimizer.param_groups[0]["lr"]
+
+                score = pellets_eaten * SCORE_PELLET + (SCORE_DEATH if collided else 0) + (SCORE_WIN if won else 0)
+                recent_scores.append(score)
+                avg_rec = statistics.mean(recent_scores)
+                avg_loss = statistics.mean(ep_losses) if ep_losses else 0.0
+
+                val_sc = val_pel = None
+                if (ep + 1) % val_every == 0 or ep + 1 == episodes:
+                    # Validation re-seeds the global RNG; preserve the training stream afterwards.
+                    py_state, np_state, torch_state = random.getstate(), np.random.get_state(), torch.get_rng_state()
+                    val_sc, val_pel = evaluate_dqn(policy_net, episodes=val_episodes, max_steps=max_steps)
+                    random.setstate(py_state); np.random.set_state(np_state); torch.set_rng_state(torch_state)
+
+                    mark = ""
+                    if val_sc > best_val_score:
+                        best_val_score = val_sc
+                        best_val_episode = ep + 1
+                        _atomic_torch_save(policy_net.state_dict(), save_path)
+                        mark = " [* SAVED BEST]"
+
+                    log_print(
+                        f"Ep {ep+1:04d}/{episodes} | Train Avg(50): {avg_rec:6.1f} | "
+                        f"Val Score: {val_sc:6.1f} (Pellets: {val_pel:4.1f}) | "
+                        f"eps: {epsilon:4.2f} | lr: {current_lr:.2e} | Time: {time.time() - t0:4.0f}s{mark}"
+                    )
+
+                metrics_history.append({
+                    "episode": ep + 1,
+                    "score": score,
+                    "train_avg_score": round(avg_rec, 1),
+                    "pellets": pellets_eaten,
+                    "reward": round(ep_reward, 1),
+                    "steps": steps,
+                    "collided": collided,
+                    "loss": round(avg_loss, 4),
+                    "epsilon": round(epsilon, 4),
+                    "learning_rate": current_lr,
+                    "val_score": round(val_sc, 1) if val_sc is not None else None,
+                    "val_pellets": round(val_pel, 1) if val_pel is not None else None,
+                })
+
+                done = ep + 1
+                if done < episodes and (done % checkpoint_every == 0 or done == session_end):
+                    save_training_state(done, time.time() - t0)
+                    if done == session_end:
+                        log_print(f"[CHECKPOINT] Stopped after episode {done}/{episodes}; "
+                                  f"continue with --resume ({os.path.relpath(checkpoint_path)})")
+
+        except KeyboardInterrupt:
+            # Count only fully completed episodes (also correct if Ctrl+C lands inside a
+            # periodic save). The interrupted episode's partial experience and updates are
+            # kept, and a resume replays that episode index.
+            done = len(metrics_history)
+            log_print(f"\n[INTERRUPTED] Saving training state after episode {done}/{episodes}...")
+            save_training_state(done, time.time() - t0)
+            log_print(f"[CHECKPOINT] Saved to {os.path.relpath(checkpoint_path)}; continue with --resume")
+            return {"completed": False, "episodes_done": done, "best_val_score": best_val_score,
+                    "best_val_episode": best_val_episode, "metrics": metrics_history}
+
+        if len(metrics_history) < episodes:
+            return {"completed": False, "episodes_done": len(metrics_history), "best_val_score": best_val_score,
+                    "best_val_episode": best_val_episode, "metrics": metrics_history}
 
         log_print("\n======================================================================")
         # Relative path: the log is a committed artifact and must not embed local directories
@@ -450,36 +641,47 @@ def train_dqn(
         log_print(f" Best Validation Score: {best_val_score:.1f} (episode {best_val_episode})")
         log_print("======================================================================")
 
-    # Export metrics files
-    with open(json_path, "w", encoding="utf-8", newline="\n") as f:
-        json.dump(metrics_history, f, indent=2)
-
-    if metrics_history:
-        with open(csv_path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=list(metrics_history[0].keys()), lineterminator="\n")
-            writer.writeheader()
-            writer.writerows(metrics_history)
+    export_metrics()
+    # The resumable state only serves unfinished runs; drop it so a stale state can't be resumed.
+    if os.path.exists(checkpoint_path):
+        os.remove(checkpoint_path)
 
     if make_plots:
         from rl.plot_metrics import plot_metrics  # lazy: pulls in pygame
         plot_metrics(json_path, weights_dir)
 
-    return {"best_val_score": best_val_score, "best_val_episode": best_val_episode, "metrics": metrics_history}
+    return {"completed": True, "episodes_done": episodes, "best_val_score": best_val_score,
+            "best_val_episode": best_val_episode, "metrics": metrics_history}
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train DQN on Pac-Man")
-    parser.add_argument("--episodes", type=int, default=1200, help="Number of training episodes")
-    parser.add_argument("--lr", type=float, default=5e-4, help="Learning rate")
-    parser.add_argument("--batch-size", type=int, default=64, help="Batch size")
-    parser.add_argument("--seed", type=int, default=0, help="Global RNG seed")
-    parser.add_argument("--save-path", type=str, default=DEFAULT_MODEL_PATH, help="Path to save model weights")
+    parser = argparse.ArgumentParser(
+        description="Train DQN on Pac-Man",
+        epilog="Resume an interrupted run with --resume; hyperparameters then come from the checkpoint.",
+    )
+    parser.add_argument("--episodes", type=int, default=None, help="Number of training episodes (default 1200)")
+    parser.add_argument("--lr", type=float, default=None, help="Learning rate (default 5e-4)")
+    parser.add_argument("--batch-size", type=int, default=None, help="Batch size (default 64)")
+    parser.add_argument("--seed", type=int, default=None, help="Global RNG seed (default 0)")
+    parser.add_argument("--save-path", type=str, default=None, help="Path to save best model weights")
+    parser.add_argument("--resume", action="store_true", help="Continue from the training-state checkpoint")
+    parser.add_argument("--checkpoint-path", type=str, default=None,
+                        help=f"Training-state file (default: <save-path dir>/{TRAINING_STATE_NAME})")
+    parser.add_argument("--checkpoint-every", type=int, default=100, help="Save training state every N episodes (default 100)")
+    parser.add_argument("--stop-after", type=int, default=None,
+                        help="Run at most N episodes in this session, save training state, then exit")
+    parser.add_argument("--no-plots", action="store_true", help="Skip figure generation at the end")
     args = parser.parse_args()
 
-    train_dqn(
-        episodes=args.episodes,
-        lr=args.lr,
-        batch_size=args.batch_size,
-        seed=args.seed,
-        save_path=args.save_path,
-    )
+    hyper = {"episodes": args.episodes, "lr": args.lr, "batch_size": args.batch_size,
+             "seed": args.seed, "save_path": args.save_path}
+    passed = {k: v for k, v in hyper.items() if v is not None}
+    if args.resume and passed:
+        parser.error(f"--resume uses the checkpoint's hyperparameters; drop {', '.join('--' + k.replace('_', '-') for k in passed)}")
+
+    common = dict(checkpoint_every=args.checkpoint_every, stop_after=args.stop_after, make_plots=not args.no_plots)
+    if args.resume:
+        train_dqn(resume=True, checkpoint_path=args.checkpoint_path
+                  or default_training_state_path(), **common)
+    else:
+        train_dqn(checkpoint_path=args.checkpoint_path, **passed, **common)

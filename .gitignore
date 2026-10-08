@@ -49,5 +49,8 @@ desktop.ini
 # Logs (keep dqn_training.log as benchmark artifact)
 *.tmp
 
+# Resumable DQN training state (multi-GB, local to an unfinished run)
+rl/weights/dqn_training_state.pt
+
 # Test / tool caches
 .pytest_cache/
