@@ -1,22 +1,26 @@
 """Regression tests for fixes recorded in CODE_REVIEW.md."""
 
-import unittest
+import importlib.util
+import os
 import threading
 import time
-import os
+import unittest
 
 from agents.base import DecisionResult
 from compare_baselines import run_episode
-from rl.train_dqn import ReplayBuffer, STALL_STEPS, compute_reward, masked_next_actions
-from pacman_game import PacmanGame
 from core.environment import Environment
+from pacman_game import PacmanGame
 
-try:
+# Optional dependencies: skip the tests that need them instead of failing the whole run.
+NUMPY_AVAILABLE = importlib.util.find_spec("numpy") is not None
+TORCH_AVAILABLE = NUMPY_AVAILABLE and importlib.util.find_spec("torch") is not None
+PYGAME_AVAILABLE = importlib.util.find_spec("pygame") is not None
+
+if NUMPY_AVAILABLE:
     import numpy as np
+    from rl.train_dqn import ReplayBuffer, STALL_STEPS, compute_reward, masked_next_actions
+if TORCH_AVAILABLE:
     import torch
-    TORCH_AVAILABLE = True
-except ImportError:  # pragma: no cover - optional dependency
-    TORCH_AVAILABLE = False
 
 
 class InvalidMoveAgent:
@@ -51,12 +55,30 @@ class BlockingAgent:
         return DecisionResult("left")
 
 
+class StatefulBlockingAgent(BlockingAgent):
+    """Records history in decide() like DQNAgent does; reset() clears it."""
+
+    def __init__(self):
+        super().__init__()
+        self.history = []
+
+    def decide(self, *args):
+        self.started.set()
+        self.release.wait(timeout=2)
+        self.history.append(args[0])
+        return DecisionResult("left")
+
+    def reset(self):
+        self.history.clear()
+
+
 class ImmediateAgent:
     def decide(self, *args):
         return DecisionResult("right")
 
 
 class TestReviewRegressions(unittest.TestCase):
+    @unittest.skipUnless(NUMPY_AVAILABLE, "NumPy is optional")
     def test_stall_cutoff_applies_penalty(self):
         reward, stalled = compute_reward(None, "left", False, False, False, 2, STALL_STEPS - 1)
         self.assertFalse(stalled)
@@ -93,6 +115,7 @@ class TestReviewRegressions(unittest.TestCase):
         env.respawn()
         self.assertEqual(env.mode_step, 0)
 
+    @unittest.skipUnless(PYGAME_AVAILABLE, "pygame is optional")
     def test_pygame_collision_path_uses_environment_respawn(self):
         import pygame
 
@@ -145,6 +168,33 @@ class TestReviewRegressions(unittest.TestCase):
         old_agent.release.set()
         time.sleep(0.02)
         self.assertEqual(game.latest_decision_result.choice, "right")
+
+    def test_reset_during_inflight_decision_leaves_agent_clean(self):
+        game = PacmanGame.__new__(PacmanGame)
+        game.decision_lock = threading.RLock()
+        game.decision_epoch = 0
+        game.pending_decision = False
+        game.latest_decision_result = None
+        game.active_decision = None
+        game.pacman_pos = [9, 15]
+        game.ghost_positions = [[9, 7]]
+        game.pellets = {(1, 1)}
+        game.last_move = "left"
+        agent = StatefulBlockingAgent()
+        game.controllers = [{"agent": agent}]
+        game.active_idx = 0
+
+        game.start_decision_query(["left", "right"])
+        self.assertTrue(agent.started.wait(timeout=1))
+        # [R] / agent switch while the worker is still inside decide()
+        game._invalidate_pending_decision()
+        game._reset_agent(agent)  # must not block the UI thread
+        agent.release.set()
+        deadline = time.monotonic() + 2
+        while game._agent_lock(agent).locked() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertEqual(agent.history, [], "stale decision left temporal state behind")
+        self.assertIsNone(game.latest_decision_result)
 
     def test_tournament_counts_blocked_direction_once(self):
         result = run_episode(WallMoveAgent(), seed=1000, max_moves=1)

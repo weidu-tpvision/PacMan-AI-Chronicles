@@ -1,8 +1,8 @@
 """
 PacMan-AI-Chronicles: Multi-Agent Visualizer & Decision Arena (Pygame)
 Seamlessly compare 40 years of AI decision paradigms in real-time:
-[1] Policy-Optimized RL, [2] Deep Q-Network (PyTorch DQN), [3] Greedy Heuristic,
-[4] Textbook Q-Learning, [5] System 1 (Ollama / Jev), [6] Random Baseline.
+[1] Policy-Optimized RL, [2] Deep Q-Network (PyTorch DQN), [3] System 1 (Ollama / Jev),
+[4] Greedy Heuristic, [5] Textbook Q-Learning, [6] Random Baseline.
 """
 
 
@@ -17,16 +17,14 @@ from typing import List, Optional
 try:
     import pygame
 except ImportError:
-    print("\n[ERROR] Pygame is not installed in this environment.")
-    print("Please install it with: pip install pygame-ce\n")
-    sys.exit(1)
+    pygame = None
 
 from agents.base import DecisionResult
 from agents.dqn_agent import DQNAgent
 from agents.registry import build_controllers
 from core.environment import DEFAULT_MAX_STEPS, SCORE_DEATH, SCORE_PELLET, SCORE_WIN, Environment
 from core.maze_data import GRID_HEIGHT, GRID_WIDTH
-from llm.decision_client import SystemOneAgent
+from llm.decision_client import DEFAULT_MODEL, DEFAULT_OLLAMA_HOST, SystemOneAgent
 
 
 # Colors
@@ -55,11 +53,11 @@ class PacmanGame:
     def __init__(
         self,
         tile_size: int = 26,
-        model: str = "nimble",
-        host: str = "http://localhost:11434",
+        model: str = DEFAULT_MODEL,
+        host: str = DEFAULT_OLLAMA_HOST,
         force_mock: bool = False,
         speed: float = 6.0,
-        initial_agent_idx: int = 1,
+        initial_agent_idx: int = 0,
     ):
         # Ensure display driver uses native OS window (defend against headless dummy flags)
         if os.environ.get("SDL_VIDEODRIVER") == "dummy":
@@ -113,6 +111,9 @@ class PacmanGame:
         self.pending_decision = False
         self.decision_epoch = 0
         self.decision_lock = threading.RLock()
+        # Per-agent locks serialize decide() and reset() on the same agent object, so a
+        # worker thread can never write stale temporal state after (or during) a reset.
+        self._agent_locks = {}
         self.latest_decision_result: Optional[DecisionResult] = None
         self.active_decision: Optional[DecisionResult] = None
         self.move_history = collections.deque(maxlen=6)
@@ -129,8 +130,7 @@ class PacmanGame:
             self._invalidate_pending_decision()
             self.active_idx = idx
             c = self.current_controller
-            if hasattr(c["agent"], "reset"):
-                c["agent"].reset()
+            self._reset_agent(c["agent"])
             self.banner_text = f"Switched AI: {c['name']}"
             self.banner_timer = 2.0
 
@@ -142,14 +142,46 @@ class PacmanGame:
             self.latest_decision_result = None
             self.active_decision = None
 
+    def _agent_lock(self, agent) -> threading.Lock:
+        # dict.setdefault is atomic, so main and worker threads agree on one lock per agent
+        locks = self.__dict__.setdefault("_agent_locks", {})
+        return locks.setdefault(id(agent), threading.Lock())
+
+    def _reset_agent(self, agent):
+        """Reset `agent` now, or let its in-flight worker do it.
+
+        Call after _invalidate_pending_decision(). If a worker currently holds the agent
+        lock, it will observe the bumped epoch when its decision returns and reset the
+        agent itself, so the UI thread never blocks on a slow (live) decision.
+        """
+        if not hasattr(agent, "reset"):
+            return
+        with self.decision_lock:
+            lock = self._agent_lock(agent)
+            if lock.acquire(blocking=False):
+                try:
+                    agent.reset()
+                finally:
+                    lock.release()
+
     def reset_game(self):
         """Reset full game to initial state."""
         self._invalidate_pending_decision()
         for c in self.controllers:
-            if hasattr(c["agent"], "reset"):
-                c["agent"].reset()
+            self._reset_agent(c["agent"])
 
-        self.env = Environment()
+        self.level = 1
+        self._load_board(Environment())
+        self.score = 0
+        self.lives = 3
+        self.move_count = 0
+        self.game_over = False
+        self.collision_flash = 0
+        self.move_history.clear()
+
+    def _load_board(self, env: Environment):
+        """Point the visual state at a fresh board (new game or next level)."""
+        self.env = env
         self.pacman_pos = list(self.env.pacman_pos)
         self.pacman_visual = [float(self.pacman_pos[0]), float(self.pacman_pos[1])]
         self.pacman_dir = "left"
@@ -162,13 +194,6 @@ class PacmanGame:
         self.walls = self.env.walls
         self.pellets = self.env.pellets
         self.initial_pellet_count = len(self.pellets)
-        self.score = 0
-        self.lives = 3
-        self.move_count = 0
-        self.game_over = False
-        self.victory = False
-        self.collision_flash = 0
-        self.move_history.clear()
 
     def get_legal_moves(self, x: int, y: int) -> List[str]:
         return self.env.get_legal_moves(x, y)
@@ -191,22 +216,29 @@ class PacmanGame:
             steps_without_pellet = getattr(env, "steps_without_pellet", 0)
             active_agent = self.current_controller["agent"]
 
+        agent_lock = self._agent_lock(active_agent)
+
         def worker():
-            if isinstance(active_agent, DQNAgent):
-                res = active_agent.decide(
-                    pac_pos, ghost_pos, pellets_copy, legal_copy, last_move,
-                    mode_step=mode_step, ghost_dirs=ghost_dirs,
-                    steps_without_pellet=steps_without_pellet,
-                    # Open-ended session: keep the horizon plane at "full episode ahead"
-                    # instead of letting it count down to 0 (never seen in training).
-                    steps_remaining=DEFAULT_MAX_STEPS, horizon=DEFAULT_MAX_STEPS,
-                )
-            else:
-                res = active_agent.decide(pac_pos, ghost_pos, pellets_copy, legal_copy, last_move)
-            with self.decision_lock:
-                if request_epoch == self.decision_epoch:
-                    self.latest_decision_result = res
-                    self.pending_decision = False
+            with agent_lock:
+                if isinstance(active_agent, DQNAgent):
+                    res = active_agent.decide(
+                        pac_pos, ghost_pos, pellets_copy, legal_copy, last_move,
+                        mode_step=mode_step, ghost_dirs=ghost_dirs,
+                        steps_without_pellet=steps_without_pellet,
+                        # Open-ended session: keep the horizon plane at "full episode ahead"
+                        # instead of letting it count down to 0 (never seen in training).
+                        steps_remaining=DEFAULT_MAX_STEPS, horizon=DEFAULT_MAX_STEPS,
+                    )
+                else:
+                    res = active_agent.decide(pac_pos, ghost_pos, pellets_copy, legal_copy, last_move)
+                with self.decision_lock:
+                    if request_epoch == self.decision_epoch:
+                        self.latest_decision_result = res
+                        self.pending_decision = False
+                    elif hasattr(active_agent, "reset"):
+                        # Game state changed while deciding: _reset_agent() could not take
+                        # the lock, so discard the temporal state this decision recorded.
+                        active_agent.reset()
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -214,7 +246,7 @@ class PacmanGame:
         if self.banner_timer > 0:
             self.banner_timer -= dt
 
-        if self.game_over or self.victory:
+        if self.game_over:
             return
 
         if self.collision_flash > 0:
@@ -280,8 +312,14 @@ class PacmanGame:
                     if ate:
                         self.score += SCORE_PELLET
                     if won:
+                        # Same rule as web_arena.py: keep score & lives, advance to a fresh board
                         self.score += SCORE_WIN
-                        self.victory = True
+                        self.level += 1
+                        self._invalidate_pending_decision()
+                        self._load_board(Environment())
+                        self._reset_agent(self.current_controller["agent"])
+                        self.banner_text = f"Level cleared! Now on level {self.level}"
+                        self.banner_timer = 2.5
 
                     if collided:
                         self.score += SCORE_DEATH
@@ -299,8 +337,7 @@ class PacmanGame:
                             self.pacman_visual = [float(self.pacman_pos[0]), float(self.pacman_pos[1])]
                             self.ghost_visuals = [[float(g[0]), float(g[1])] for g in self.ghost_positions]
                             # CRITICAL: reset agent temporal velocity tracking on respawn!
-                            if hasattr(self.current_controller["agent"], "reset"):
-                                self.current_controller["agent"].reset()
+                            self._reset_agent(self.current_controller["agent"])
 
                     if self.step_once:
                         self.step_once = False
@@ -566,7 +603,7 @@ class PacmanGame:
         y += 20
 
         stats = [
-            f"Score: {self.score}   |   Moves: {self.move_count}",
+            f"Score: {self.score}   |   Moves: {self.move_count}   |   Level: {self.level}",
             f"Pellets Remaining: {len(self.pellets)} / {self.initial_pellet_count}",
         ]
         for s in stats:
@@ -587,9 +624,6 @@ class PacmanGame:
         if self.game_over:
             over_txt = self.font_title.render("GAME OVER - Press R", True, (239, 68, 68))
             self.screen.blit(over_txt, (panel_x + pad, self.screen_height - 30))
-        elif self.victory:
-            win_txt = self.font_title.render("VICTORY! All Pellets Eaten!", True, (34, 197, 94))
-            self.screen.blit(win_txt, (panel_x + pad, self.screen_height - 30))
         elif self.paused:
             pause_txt = self.font_bold.render("|| PAUSED (Press SPACE to step)", True, (245, 158, 11))
             self.screen.blit(pause_txt, (panel_x + pad, self.screen_height - 30))
@@ -649,8 +683,8 @@ class PacmanGame:
 
 def main():
     parser = argparse.ArgumentParser(description="Pac-Man Multi-Agent AI Arena")
-    parser.add_argument("--model", type=str, default="nimble", help="Ollama model name (default: nimble)")
-    parser.add_argument("--host", type=str, default="http://localhost:11434", help="Ollama host URL")
+    parser.add_argument("--model", type=str, default=DEFAULT_MODEL, help=f"Ollama model name (default: {DEFAULT_MODEL})")
+    parser.add_argument("--host", type=str, default=DEFAULT_OLLAMA_HOST, help="Ollama host URL")
     parser.add_argument("--speed", type=float, default=6.0, help="Initial movement speed in tiles/sec (default: 6.0)")
     parser.add_argument("--mock", action="store_true", help="Force heuristic mock mode for System 1")
     parser.add_argument(
@@ -660,6 +694,11 @@ def main():
         help="Initial active agent index (0: RL Optimized, 1: DQN, 2: System 1, 3: Greedy, 4: Q-Textbook, 5: Random)",
     )
     args = parser.parse_args()
+
+    if pygame is None:
+        print("\n[ERROR] Pygame is not installed in this environment.")
+        print("Please install it with: pip install pygame-ce\n")
+        sys.exit(1)
 
     game = PacmanGame(
         model=args.model,

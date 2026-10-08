@@ -14,7 +14,7 @@ Welcome to **PacMan-AI-Chronicles**. This document serves as the canonical conte
 │ Expert Rules │ ──> │ Classical RL │ ──> │ Policy Optim (ES) │ ──> │    Deep RL (DQN)    │ ──> │   System 1 LLM  │
 │ (Greedy BFS) │     │ (Linear TD)  │     │   (CEM Search)    │     │  (PyTorch ConvNet)  │     │  (Transformer)  │
 └──────────────┘     └──────────────┘     └───────────────────┘     └─────────────────────┘     └─────────────────┘
-   µs-scale            µs-scale              µs-scale                   sub-ms, CPU-only         ~100 ms / decision
+   µs-scale            µs-scale              µs-scale                   sub-ms, CPU-only         network round-trip
 ```
 
 > Experiment scores and timings are **not** recorded in this document — the engine and
@@ -50,7 +50,7 @@ system_one/
 │   └── __init__.py              # Agent registry exports
 │
 ├── rl/                          # Reinforcement Learning Subsystem
-│   ├── dqn_model.py             # PacmanDQN CNN, encode_frame (Z-order), encode_state
+│   ├── dqn_model.py             # PacmanDQN CNN and the 30-channel encode_state
 │   ├── train_dqn.py             # Double-DQN training pipeline with ReplayBuffer & metrics
 │   ├── plot_metrics.py          # Visualization generator (PNG & vector SVG figures)
 │   ├── train_q_learning.py      # Approximate linear TD Q-learning trainer
@@ -68,11 +68,13 @@ system_one/
 │
 ├── llm/                         # System 1 Subsystem
 │   ├── decision_client.py       # Ollama REST client & heuristic simulator fallback
-│   ├── test_client.py           # Latency and schema test runner
+│   ├── check_client.py          # Manual live/offline smoke runner (python -m llm.check_client)
 │   └── __init__.py
 │
 ├── tests/                       # Automated Test Suite
 │   ├── test_agents.py           # Agent instantiation and decision verification
+│   ├── test_environment.py      # Scatter/Chase clock, collision rule, tunnel wrap
+│   ├── test_facades.py          # Root compatibility facades
 │   ├── test_system_one.py       # Schema and fallback verification
 │   └── test_review_regressions.py # Regression coverage for prior code-review fixes
 │
@@ -81,7 +83,7 @@ system_one/
 ├── benchmark.py                 # Latency / throughput profiler
 ├── web_arena.py                 # Zero-dependency browser visualizer (HTML5/Canvas)
 ├── dqn_model.py                 # Backward-compatibility facade for rl.dqn_model
-├── requirements.txt             # Pinned dependencies
+├── requirements.txt             # Runtime dependencies (minimum versions)
 └── GEMINI.md                    # This document
 ```
 
@@ -102,10 +104,10 @@ Rather than compressing objects into a scalar matrix where negative values colli
 * **Channels 26–29**: Global scalar planes — scatter-mode flag, Scatter/Chase cycle phase, stall progress, remaining episode horizon
 
 ### 2. Temporal Velocity Tracking & Inertia
-* By cross-correlating Channels $(2, 4)$ and $(3, 5)$, 2D convolutional kernels directly compute **velocity vectors $(\Delta x, \Delta y)$ and headings** for both Pac-Man and all ghosts without hand-crafted physics.
-* **Momentum Regulation**: Inverse direction penalties during exploration ($-1.5$) and inference (`legal_q[opp] -= 1.0`) prevent micro-oscillations between adjacent empty corridor cells.
-* **Anti-Stall Cutoff**: A 45-step inactive loop cutoff during training ($-50.0$ penalty) prevents empty corridors from becoming infinite orbit havens.
-* **Anti-Orbit Dynamic Memory**: A 16-step rolling position buffer (`recent_positions`) tracks repeated tile visits during inference. When no pellets have been eaten and a candidate move leads into repeatedly visited empty corridors ($\ge 2$ visits), a scaled loop penalty (`visit_count * 20.0`) is subtracted, allowing the agent to exit local corridor limit cycles without retraining.
+* By cross-correlating current/previous position pairs — Pac-Man $(2, 3)$ and ghosts $(4, 7)$, $(5, 8)$, $(6, 9)$ — 2D convolutional kernels can compute **velocity vectors $(\Delta x, \Delta y)$**; the heading planes (10–25) supply directions explicitly.
+* **Momentum Regulation**: Reversal penalties during training (`R_REVERSAL` in `rl/train_dqn.py`) and inference (`REVERSAL_PENALTY` in `agents/dqn_agent.py`) discourage micro-oscillations between adjacent empty corridor cells.
+* **Anti-Stall Cutoff**: During training, `STALL_STEPS` consecutive steps without a pellet end the episode with a penalty, so empty corridors cannot become infinite orbit havens.
+* **Anti-Orbit Dynamic Memory**: A rolling position buffer (`recent_positions`) tracks repeated tile visits during inference. When no pellets have been eaten and a candidate move leads into repeatedly visited empty corridors, a penalty proportional to the visit count (`ORBIT_PENALTY_PER_VISIT`) is subtracted, allowing the agent to exit local corridor limit cycles without retraining.
 
 ### 3. Global Receptive Field Neural Architecture (`PacmanDQN`)
 * **Input**: `(batch, 30, 21, 19)`
@@ -119,9 +121,10 @@ Rather than compressing objects into a scalar matrix where negative values colli
 ### 4. Double DQN & Optimization
 * **Target Network**: Decouples action selection from action evaluation to eliminate maximization bias; next-action selection is masked to legal moves:
   $$y = r + \gamma (1 - d) Q_{\text{target}}\left(s', \arg\max_{a' \in A_{\text{legal}}(s')} Q_{\text{policy}}(s', a')\right)$$
-* **Prioritized replay**: Samples transitions in proportion to $(|\delta|+\epsilon)^{0.6}$ and applies annealed importance-sampling weights to the per-item Huber loss.
-* **Loss**: Smooth L1 (Huber) Loss with gradient norm clipping (`max_norm = 5.0`).
-* **Optimizer**: Adam with cosine annealing from $5 \times 10^{-4}$ to $5 \times 10^{-5}$ over the requested episode count.
+* **Prioritized replay**: Samples transitions in proportion to $(|\delta|+\epsilon)^{\alpha}$ and applies annealed importance-sampling weights to the per-item Huber loss.
+* **Loss**: Smooth L1 (Huber) Loss with gradient norm clipping.
+* **Optimizer**: Adam with cosine learning-rate annealing over the requested episode count.
+* **Hyperparameters**: defaults live in `rl/train_dqn.py` (`train_dqn()` signature and module constants). They are working values, not tuned or final — do not copy them into this document.
 * **Tournament scores**: see `results/tournament_results.json` (regenerate with `compare_baselines.py`); never record them here.
 
 ### 5. Training Diagnostic Protocol (Mandatory for Every Run)
@@ -131,11 +134,12 @@ Every DQN training run must follow this standardized automated diagnostic workfl
 2. **Automated Multi-Panel Figure Generation**: The training runner must execute [`rl/plot_metrics.py`](rl/plot_metrics.py) at the end of training to generate:
    * **Vector Dashboard**: [`rl/weights/dqn_training_figures.svg`](rl/weights/dqn_training_figures.svg) (scalable publication quality).
    * **Raster Dashboard**: [`rl/weights/dqn_training_figures.png`](rl/weights/dqn_training_figures.png) (4-panel visual dashboard).
-3. **Artifact-Only Results**: Training conclusions (validation means, best-checkpoint episode, quartile analyses) live in the artifacts above and in commit messages — **not** in this document, so this guide can never drift from the latest run.
+3. **Artifact-Only Results**: Training conclusions (validation means, best-checkpoint episode, quartile analyses) and run parameters live in the artifacts above — **not** in this document, so this guide can never drift from the latest run.
+4. **Checkpoint Status**: No full DQN training run has been performed since the latest DQN and environment changes (including the collision-rule fix); the shipped checkpoint predates them and must be retrained before its scores are meaningful.
 
 ### 6. Standardized Simulation Engine (`core.environment.Environment`)
 * **Single Source of Truth**: All game arenas ([`pacman_game.py`](pacman_game.py), [`web_arena.py`](web_arena.py)), training pipelines ([`rl/train_dqn.py`](rl/train_dqn.py), [`rl/train_q_learning.py`](rl/train_q_learning.py), [`rl/optimize_policy.py`](rl/optimize_policy.py)), and tournament runners ([`compare_baselines.py`](compare_baselines.py)) share the exact same `core.environment.Environment` engine.
-* **Arcade Scatter / Chase Dynamics**: Ghosts cycle between 28 steps in Chase Mode (direct pursuit, ambush, flanking) and 7 steps in Scatter Mode (heading to designated home corners), faithfully replicating Namco 1980 arcade behavior and naturally shattering static phase-locked stalemates.
+* **Arcade Scatter / Chase Dynamics**: Ghosts cycle between Chase Mode (`CHASE_STEPS`: direct pursuit, ambush, flanking) and Scatter Mode (`SCATTER_STEPS`: heading to designated home corners), faithfully replicating Namco 1980 arcade behavior and naturally shattering static phase-locked stalemates.
 * **Seeded Reproducibility**: Each environment instance uses an isolated `self.rng = random.Random(seed)` with subtle ($10\%$) junction exploration noise, guaranteeing that tournament benchmarks evaluate diverse, realistic game trajectories across seeds while remaining fully reproducible.
 * **Episodic & Life-Loss Reset**: When Pac-Man loses a life or resets, calling `agent.reset()` immediately purges temporal velocity buffers, preventing corrupted post-respawn momentum vectors.
 
@@ -174,11 +178,11 @@ python -m unittest discover tests
 python tests/test_agents.py
 python tests/test_system_one.py
 
-# 2. Run Tournament Benchmark (head-to-head on identical TEST seeds; default horizon = canonical 300)
-python compare_baselines.py --episodes 100 --offline
+# 2. Run Tournament Benchmark (head-to-head on identical TEST seeds at the canonical DEFAULT_MAX_STEPS horizon)
+python compare_baselines.py --offline     # options: --help
 
-# 3. Train DQN
-python rl/train_dqn.py --episodes 1200 --batch-size 64 --lr 0.0005
+# 3. Train DQN (defaults in rl/train_dqn.py; options: --help)
+python rl/train_dqn.py
 
 # 4. Generate Training Diagnostic Figures (PNG & SVG)
 python rl/plot_metrics.py

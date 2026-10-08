@@ -140,8 +140,8 @@ class TrainedQLearningAgent(_LinearQAgent):
 
     def __init__(
         self,
-        weights_path: str = "learned_enhanced_weights.json",
         name: str = "RL (Policy Optimized)",
+        weights_path: str = "learned_enhanced_weights.json",
     ):
         weights, loaded = _load_weights(weights_path, ENHANCED_FEATURES, ENHANCED_DEFAULT_WEIGHTS)
         super().__init__(name, "Optimized RL Policy (CEM)", weights, loaded)

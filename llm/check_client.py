@@ -1,40 +1,31 @@
 """
-Headless test runner for the System 1 decision engine.
+Manual smoke runner for the System 1 decision engine (live Ollama or offline simulator).
 Validates state extraction, question formatting, and decision generation.
+
+Not a unit test (it may contact a live server): run it explicitly with
+    python -m llm.check_client
 """
 
-from llm.decision_client import SystemOneAgent
-from core.maze_data import DIRECTIONS, MAZE_LAYOUT, START_POSITIONS
+from core.environment import Environment
+from core.maze_data import START_POSITIONS
+from llm.decision_client import DEFAULT_MODEL, SystemOneAgent
 
 
-def test_decision_pipeline():
+def check_decision_pipeline():
     print("==================================================")
     print("Testing System 1 Decision Model Pipeline")
     print("==================================================")
 
-    agent = SystemOneAgent(model="nimble", prefer_live=True)
+    agent = SystemOneAgent(model=DEFAULT_MODEL, prefer_live=True)
     online = agent.is_ollama_online(force_refresh=True)
-    print(f"Ollama Service Reachable (localhost:11434): {online}")
+    print(f"Ollama Service Reachable ({agent.host}): {online}")
 
-    pacman_pos = tuple(START_POSITIONS["pacman"])
+    env = Environment()
     ghost_positions = [tuple(g) for g in START_POSITIONS["ghosts"]]
 
-    # Collect pellets
-    pellets = set()
-    walls = set()
-    for y, row in enumerate(MAZE_LAYOUT):
-        for x, char in enumerate(row):
-            if char == "#":
-                walls.add((x, y))
-            elif char == ".":
-                pellets.add((x, y))
-
-    # Test intersection at (8, 15)
+    # Junction next to the spawn tile; legal moves come from the real environment
     test_pos = (8, 15)
-    legal_moves = []
-    for d, (dx, dy) in DIRECTIONS.items():
-        if (test_pos[0] + dx, test_pos[1] + dy) not in walls:
-            legal_moves.append(d)
+    legal_moves = env.get_legal_moves(*test_pos)
 
     print(f"\nEvaluating Position: {test_pos}")
     print(f"Legal Moves: {legal_moves}")
@@ -43,7 +34,7 @@ def test_decision_pipeline():
     result = agent.decide_move(
         pacman_pos=test_pos,
         ghost_positions=ghost_positions,
-        pellets=pellets,
+        pellets=env.pellets,
         legal_moves=legal_moves,
     )
 
@@ -52,6 +43,8 @@ def test_decision_pipeline():
     print(f"Selected Choice: {result.choice}")
     print(f"Confidence: {result.confidence:.3f}")
     print(f"Latency: {result.latency_ms:.1f} ms")
+    if result.error_msg:
+        print(f"Note: {result.error_msg}")
     print("Probabilities:")
     for m, p in result.probabilities.items():
         print(f"  - {m:5}: {p * 100:.1f}%")
@@ -61,4 +54,4 @@ def test_decision_pipeline():
 
 
 if __name__ == "__main__":
-    test_decision_pipeline()
+    check_decision_pipeline()

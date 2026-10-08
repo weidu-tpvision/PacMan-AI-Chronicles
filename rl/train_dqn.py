@@ -119,9 +119,9 @@ class ReplayBuffer:
         self.alpha = alpha
         self.priority_epsilon = priority_epsilon
         self.position = 0
+        self.max_priority = 1.0  # new transitions get the highest priority seen so far
 
     def push(self, state, action_idx, reward, next_state, done, next_action_mask=None):
-        max_priority = float(self.priorities[:len(self.buffer)].max()) if self.buffer else 1.0
         if next_action_mask is None:
             next_action_mask = np.ones(len(ACTION_TO_IDX), dtype=np.bool_)
         item = (
@@ -132,7 +132,7 @@ class ReplayBuffer:
             self.buffer.append(item)
         else:
             self.buffer[self.position] = item
-        self.priorities[self.position] = max_priority
+        self.priorities[self.position] = self.max_priority
         self.position = (self.position + 1) % self.capacity
 
     def sample(self, batch_size: int, beta: float = 0.4):
@@ -157,7 +157,9 @@ class ReplayBuffer:
 
     def update_priorities(self, indices, td_errors):
         for index, error in zip(indices, td_errors):
-            self.priorities[index] = abs(float(error)) + self.priority_epsilon
+            priority = abs(float(error)) + self.priority_epsilon
+            self.priorities[index] = priority
+            self.max_priority = max(self.max_priority, priority)
 
     def __len__(self):
         return len(self.buffer)

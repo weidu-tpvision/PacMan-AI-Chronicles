@@ -4,8 +4,8 @@ Validates instantiation, AgentProtocol compliance, decision legality,
 probability distributions, lifecycle reset, and stateful temporal tracking.
 """
 
+import importlib.util
 import unittest
-from typing import List, Tuple
 
 from agents import (
     DQNAgent,
@@ -15,7 +15,7 @@ from agents import (
     SystemOneBaselineAgent,
     TrainedQLearningAgent,
 )
-from agents.base import AgentProtocol, DecisionResult
+from agents.base import DecisionResult
 from core.environment import Environment
 from core.maze_data import GRID_WIDTH
 from llm.decision_client import SystemOneAgent
@@ -54,14 +54,24 @@ class TestAgentSuite(unittest.TestCase):
 
     def test_decision_legality_and_bounds(self):
         """Verify agents always choose from legal moves and provide valid probability sums."""
+        env = Environment()
+        # Legal moves come from the real maze so scenarios cannot drift from the layout.
         test_scenarios = [
-            # Standard corridor
-            {"pos": (9, 15), "ghosts": [(9, 7), (7, 7), (11, 7)], "pellets": {(1, 1), (2, 1)}, "legal": ["left", "right"]},
-            # 4-way intersection
-            {"pos": (6, 5), "ghosts": [(6, 1), (12, 5)], "pellets": {(6, 6)}, "legal": ["up", "down", "left", "right"]},
-            # Single legal move (dead end)
-            {"pos": (1, 1), "ghosts": [(9, 7)], "pellets": {(1, 2)}, "legal": ["right"]},
+            # Horizontal corridor at the spawn tile
+            {"pos": (9, 15), "ghosts": [(9, 7), (7, 7), (11, 7)], "pellets": {(1, 1), (2, 1)}},
+            # 4-way junction
+            {"pos": (4, 3), "ghosts": [(4, 1), (8, 3)], "pellets": {(4, 4)}},
+            # Corner (two exits)
+            {"pos": (1, 1), "ghosts": [(9, 7)], "pellets": {(1, 2)}},
+            # Tunnel edge: wraps to the far side
+            {"pos": (0, 9), "ghosts": [(9, 7)], "pellets": {(4, 9)}},
         ]
+        for scenario in test_scenarios:
+            scenario["legal"] = env.get_legal_moves(*scenario["pos"])
+        self.assertEqual(sorted(test_scenarios[0]["legal"]), ["left", "right"])
+        self.assertEqual(len(test_scenarios[1]["legal"]), 4)
+        self.assertEqual(sorted(test_scenarios[2]["legal"]), ["down", "right"])
+        self.assertEqual(sorted(test_scenarios[3]["legal"]), ["left", "right"])
 
         for agent in self.agents:
             for scenario in test_scenarios:
@@ -90,6 +100,7 @@ class TestAgentSuite(unittest.TestCase):
                         msg=f"{agent.name} probabilities do not sum to 1.0 (got {prob_sum})",
                     )
 
+    @unittest.skipUnless(importlib.util.find_spec("torch"), "PyTorch is optional")
     def test_dqn_temporal_velocity_tracking_and_toroidal_preservation(self):
         """Verify DQNAgent retains velocity state across toroidal warp tunnel moves."""
         dqn = self.dqn_agent

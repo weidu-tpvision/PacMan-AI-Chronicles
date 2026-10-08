@@ -19,6 +19,8 @@ What happens when you pit modern **Generative AI (Large Language Models)** again
 > This project is under active research and development. In particular, the **Deep Q-Network (DQN)** subsystem is **actively being continued**.
 >
 > The feature-optimized RL agents rely on human-engineered topological features (graph BFS, junction detection, dead-end depth). In contrast, **DQN learns its entire representation and policy end-to-end directly from raw spatial grid tensors without human inductive bias**. Because it is unconstrained by human feature ceilings, an extended DQN policy has the highest theoretical ceiling in the arena. See the [DQN Research Roadmap](#-ongoing-research--dqn-roadmap) below.
+>
+> **Checkpoint status:** no full DQN training run has been performed since the latest DQN and environment changes (including the collision-rule fix). The shipped `rl/weights/dqn_pacman.pt` predates them, so any DQN figures in the generated artifacts are provisional. Experiment results and run parameters are deliberately kept out of the docs while the project is a work in progress.
 
 ```text
 
@@ -27,7 +29,7 @@ What happens when you pit modern **Generative AI (Large Language Models)** again
 │ Expert Rules │ ──> │ Classical RL │ ──> │ Policy Optim (ES) │ ──> │    Deep RL (DQN)    │ ──> │   System 1 LLM  │
 │ (Greedy BFS) │     │ (Linear TD)  │     │   (CEM Search)    │     │  (PyTorch ConvNet)  │     │  (Transformer)  │
 └──────────────┘     └──────────────┘     └───────────────────┘     └─────────────────────┘     └─────────────────┘
-   µs-scale            µs-scale              µs-scale                   sub-ms, CPU-only         ~100 ms / decision
+   µs-scale            µs-scale              µs-scale                   sub-ms, CPU-only         network round-trip
 ```
 
 ---
@@ -38,7 +40,7 @@ What happens when you pit modern **Generative AI (Large Language Models)** again
 | :-: | :--- | :--- | :--- | :-: |
 | **[1]** | **Policy-Optimized RL** | *Evolutionary / Policy Search* | Cross-Entropy Method optimizing topological graph features (Junctions, traps, BFS). | µs-scale |
 | **[2]** | **Deep Q-Network (DQN)** | *Deep Reinforcement Learning* | Identity-preserving spatial state with motion, mode, stall, and horizon features $\rightarrow$ ConvNet $\rightarrow$ Dueling Double-DQN. | sub-ms, CPU-only |
-| **[3]** | **System 1 (LLM)** | *Foundation Model Zero-Shot* | Structured JSON / spatial reasoning via Ollama `POST /v1/systemone`. | ~100 ms live round-trip |
+| **[3]** | **System 1 (LLM)** | *Foundation Model Zero-Shot* | Structured JSON / spatial reasoning via Ollama `POST /v1/systemone`. | network round-trip (live) |
 | **[4]** | **Greedy Heuristic** | *Symbolic / Expert Rules* | Hand-crafted priority rules balancing BFS food seeking and ghost evasion. | µs-scale |
 | **[5]** | **Textbook Q-Learning** | *Classical TD-Learning* | Bellman equation updates on classic linear feature approximations. | µs-scale |
 | **[6]** | **Random Baseline** | *Empirical Floor* | Uniform random distribution across legal corridors. | ~zero |
@@ -50,24 +52,24 @@ What happens when you pit modern **Generative AI (Large Language Models)** again
 All agents compete on the identical 19×21 maze across deterministic seeded **TEST** episodes (`core/seeds.py`, disjoint from the TRAIN/VAL ranges used for training and model selection).
 
 > [!IMPORTANT]
-> **Headline scores are intentionally not hardcoded in this README.** The engine, policies, and episode horizon are still evolving, so any number pasted here would silently drift out of sync with the code. The single source of truth is the generated artifact:
+> **Scores and run parameters are intentionally not recorded in this README.** The engine, policies, and episode horizon are still evolving, so any number pasted here would silently drift out of sync with the code. The single source of truth is the generated artifact:
 > **[`results/tournament_results.json`](results/tournament_results.json)** — written by the runner below, and read back by both interactive arenas to render their score badges.
 
 Reproduce the full benchmark on your machine:
 
 ```bash
-# 100 seeded TEST episodes at the canonical 300-move horizon (writes results/tournament_results.json)
-python compare_baselines.py --episodes 100
+# Seeded TEST episodes at the canonical horizon (writes results/tournament_results.json)
+python compare_baselines.py
 
-# 1,000-episode run for tighter 95% confidence intervals
-python compare_baselines.py --episodes 1000
+# Episode count, horizon, offline mode etc.: see --help (more episodes -> tighter CIs)
+python compare_baselines.py --help
 ```
 
 The report includes, per agent: mean score ±95% CI, mean moves/pellets, survival and win rates, blunder rate, illegal-move and error counts, and decision latency (System 1 latencies from the offline simulator are flagged as synthetic).
 
 ### What to look for in the numbers:
-1. **The Latency Divide:** learned/heuristic policies decide in microseconds-to-sub-millisecond on CPU, while a live LLM round-trip costs ~100 ms per move — roughly three orders of magnitude slower. For real-time games, a billion-parameter transformer per frame is radically inefficient.
-2. **Topological Feature Advantage:** CEM policy search over graph features (dead-end traps, safe junctions, BFS distances) exploits human domain knowledge that the Greedy heuristic uses only partially — compare their mean scores.
+1. **The Latency Divide:** learned/heuristic policies decide in microseconds-to-sub-millisecond on CPU, while a live LLM pays a network/model round-trip on every move. Measure it with `benchmark.py` against your own model before drawing conclusions for real-time use.
+2. **Feature Engineering vs. Search:** CEM policy search over graph features (dead-end traps, safe junctions, BFS distances), the textbook TD agent and the hand-tuned Greedy heuristic all encode human domain knowledge in different ways — compare their mean scores and CIs rather than assuming the optimized policy wins.
 3. **End-to-End Visual Learning:** the DQN learns corridor navigation from raw spatial tensors with zero feature engineering; watch whether extended training closes the gap to the feature-based agents (see roadmap below).
 
 ---
@@ -126,28 +128,26 @@ python pacman_game.py
 
 ### 3. Run the Head-to-Head Tournament Benchmark
 
-Run a reproducible tournament across all 6 agents:
+Run a reproducible tournament across all agents (the six arena controllers, with DQN reported both raw and with inference heuristics):
 
 ```bash
-# Run 100 seeded tournament episodes
-python compare_baselines.py --episodes 100
-
-# Run 1,000 seeded tournament episodes
-python compare_baselines.py --episodes 1000
+python compare_baselines.py          # options: python compare_baselines.py --help
 ```
 
 ### 4. Train New Models
 
 ```bash
 # Train the Deep Q-Network (PyTorch CNN)
-python rl/train_dqn.py --episodes 1200
+python rl/train_dqn.py
 
 # Run Direct Policy Search (Cross-Entropy Method)
-python rl/optimize_policy.py --generations 35
+python rl/optimize_policy.py
 
 # Train Approximate TD Q-Learning
-python rl/train_q_learning.py --episodes 1500
+python rl/train_q_learning.py
 ```
+
+Default hyperparameters live in each script (`--help` lists the overridable ones); they are working values, not tuned or final.
 
 ### 5. Run the Automated Test Suite
 
@@ -205,10 +205,12 @@ PacMan-AI-Chronicles/
 ├── llm/                         # System 1 / Ollama Client Subsystem
 │   ├── __init__.py              # LLM client exports
 │   ├── decision_client.py       # SystemOneAgent client & fallback heuristic simulator
-│   └── test_client.py           # Verification & latency runner
+│   └── check_client.py          # Manual live/offline smoke runner (python -m llm.check_client)
 │
 ├── tests/                       # Automated Test Suite
 │   ├── test_agents.py           # Multi-agent decision verification test
+│   ├── test_environment.py      # Scatter/Chase clock, collision rule, tunnel wrap
+│   ├── test_facades.py          # Root compatibility facades
 │   ├── test_system_one.py       # Ollama schema & response verification test
 │   └── test_review_regressions.py # Regression coverage for prior code-review fixes
 │
@@ -217,7 +219,7 @@ PacMan-AI-Chronicles/
 ├── benchmark.py                 # Latency / throughput profiler
 ├── web_arena.py                 # Zero-dependency browser visualizer (HTML5/Canvas)
 ├── LICENSE                      # MIT Open Source License
-└── requirements.txt             # Pinned runtime dependencies
+└── requirements.txt             # Runtime dependencies (minimum versions)
 ```
 
 ---

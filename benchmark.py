@@ -14,13 +14,13 @@ from typing import List
 
 from core.environment import Environment
 from core.seeds import TEST_SEED_BASE, seed_everything
-from llm.decision_client import SystemOneAgent
+from llm.decision_client import DEFAULT_MODEL, DEFAULT_OLLAMA_HOST, SystemOneAgent
 
 
 def run_benchmark(
     num_moves: int = 50,
-    model: str = "nimble",
-    host: str = "http://localhost:11434",
+    model: str = DEFAULT_MODEL,
+    host: str = DEFAULT_OLLAMA_HOST,
     force_mock: bool = False,
     seed: int = TEST_SEED_BASE,
 ):
@@ -88,8 +88,8 @@ def run_benchmark(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="System 1 Decision Benchmark")
     parser.add_argument("--moves", type=int, default=50, help="Number of decisions to simulate")
-    parser.add_argument("--model", type=str, default="nimble", help="Ollama model name")
-    parser.add_argument("--host", type=str, default="http://localhost:11434", help="Ollama host URL")
+    parser.add_argument("--model", type=str, default=DEFAULT_MODEL, help="Ollama model name")
+    parser.add_argument("--host", type=str, default=DEFAULT_OLLAMA_HOST, help="Ollama host URL")
     parser.add_argument("--mock", action="store_true", help="Force heuristic simulation mode")
     parser.add_argument("--seed", type=int, default=TEST_SEED_BASE, help="Environment seed")
     args = parser.parse_args()

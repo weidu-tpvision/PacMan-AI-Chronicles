@@ -5,7 +5,8 @@ Includes:
 - Pellet collection tracking
 - Deterministic/stochastic ghost AI with multi-target scatter/chase behaviors
 - Non-overlapping ghost dispersion logic
-- Strict head-on pass-through collision detection
+- Collision detection: same tile, or Pac-Man entering a tile a ghost occupied this step
+  (covers head-on swaps and stepping onto a ghost that then moves away)
 - Move validation (illegal moves are counted and treated as a no-op)
 - Life-loss respawn handling shared by every frontend
 """
@@ -35,6 +36,22 @@ SCORE_WIN = 500
 
 # Canonical episode horizon shared by training, validation, CEM search and the tournament
 DEFAULT_MAX_STEPS = 300
+
+
+def pacman_collides(
+    old_pac: List[int], new_pac: List[int], old_ghosts: List[List[int]], new_ghosts: List[List[int]]
+) -> bool:
+    """Collision rule for one step.
+
+    Hit if Pac-Man ends on a ghost's tile, or Pac-Man moved onto a tile a ghost occupied
+    at the start of the step (head-on swaps and "walking through" a ghost that moved
+    elsewhere). A ghost entering the tile Pac-Man just left is a miss.
+    """
+    moved = new_pac != old_pac
+    return any(
+        new_pac == new_g or (moved and new_pac == old_g)
+        for old_g, new_g in zip(old_ghosts, new_ghosts)
+    )
 
 
 class Environment:
@@ -198,13 +215,5 @@ class Environment:
 
         self.ghost_positions = new_ghosts
 
-        # Collision detection (same cell or head-on pass-through swap)
-        collided = False
-        for i in range(len(self.ghost_positions)):
-            if self.pacman_pos == self.ghost_positions[i] or (
-                old_pac == self.ghost_positions[i] and self.pacman_pos == old_ghosts[i]
-            ):
-                collided = True
-                break
-
+        collided = pacman_collides(old_pac, self.pacman_pos, old_ghosts, self.ghost_positions)
         return collided, ate_pellet, False

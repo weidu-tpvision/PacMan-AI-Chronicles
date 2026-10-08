@@ -4,16 +4,20 @@ Facades must re-export the current package symbols and must be importable withou
 side effects (in particular, importing a runner facade must not start training).
 """
 
+import importlib.util
 import unittest
 
 import agents.dqn_agent
 import core.maze_data
 import llm.decision_client
-import rl.dqn_model
+
+NUMPY_AVAILABLE = importlib.util.find_spec("numpy") is not None
 
 
+@unittest.skipUnless(NUMPY_AVAILABLE, "NumPy is optional (dqn_model / trainer facades need it)")
 class TestRootFacades(unittest.TestCase):
     def test_module_facades_reexport_current_symbols(self):
+        import rl.dqn_model
         import baselines
         import decision_client
         import dqn_model

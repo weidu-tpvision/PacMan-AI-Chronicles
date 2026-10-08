@@ -33,7 +33,7 @@ from agents.features import min_ghost_bfs, next_cell
 from core.environment import DEFAULT_MAX_STEPS, SCORE_DEATH, SCORE_PELLET, SCORE_WIN, Environment
 from core.maze_data import DIRECTIONS
 from core.seeds import seed_everything, test_seeds
-from llm.decision_client import SystemOneAgent
+from llm.decision_client import DEFAULT_MODEL, DEFAULT_OLLAMA_HOST, SystemOneAgent
 
 DEFAULT_RESULTS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results", "tournament_results.json")
 
@@ -156,8 +156,8 @@ def build_agents(model: str, host: str, sys1_live: bool):
 def run_tournament(
     episodes: int = 100,
     max_moves: int = DEFAULT_MAX_STEPS,
-    model: str = "nimble",
-    host: str = "http://localhost:11434",
+    model: str = DEFAULT_MODEL,
+    host: str = DEFAULT_OLLAMA_HOST,
     sys1_live: bool = True,
     results_path: str = DEFAULT_RESULTS_PATH,
 ):
@@ -245,8 +245,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Pac-Man Agent Tournament Comparison")
     parser.add_argument("--episodes", type=int, default=100, help="Number of seeded TEST episodes")
     parser.add_argument("--max-moves", type=int, default=DEFAULT_MAX_STEPS, help="Maximum moves per episode")
-    parser.add_argument("--model", type=str, default="nimble", help="Ollama model name")
-    parser.add_argument("--host", type=str, default="http://localhost:11434", help="Ollama host URL")
+    parser.add_argument("--model", type=str, default=DEFAULT_MODEL, help="Ollama model name")
+    parser.add_argument("--host", type=str, default=DEFAULT_OLLAMA_HOST, help="Ollama host URL")
     parser.add_argument("--offline", action="store_true", help="Force the offline System 1 simulator")
     parser.add_argument("--results", type=str, default=DEFAULT_RESULTS_PATH, help="JSON output path ('' to skip)")
     args = parser.parse_args()

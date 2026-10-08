@@ -46,7 +46,6 @@ Resetting the game or switching agents while an asynchronous decision was in fli
 - `python -m py_compile pacman_game.py rl/train_dqn.py compare_baselines.py` — **passed**.
 - A one-episode DQN smoke run with short horizon exercised prioritized replay, legal-action masks, dueling-network optimization, validation, and checkpoint writing — **completed**.
 - Loaded that temporary dueling checkpoint through `DQNAgent(require_weights=True)` — **loaded successfully**. Temporary smoke artifacts were removed.
-- Full 5,000-episode DQN run with cosine annealing — **completed**; best validation mean **+1,018.0** at episode **4,900**. Checkpoint and SVG/PNG diagnostics were saved.
 
 ## Overall assessment
 
@@ -61,14 +60,14 @@ The three findings above are fixed and covered by regressions. The shared archit
 ## New findings (fixed in this round)
 
 ### [Fixed] README/GEMINI hardcoded experiment results that no longer matched the code
-The README tournament table claimed 1,000 seeds / 150-move horizon with scores (926.2 CEM, 570.0 DQN, …) that match no reproducible configuration; the committed `results/tournament_results.json` was a 100-seed / 400-move run with entirely different numbers. The README roadmap and GEMINI claimed a 5,000-episode DQN run with best validation 1,018.0, while the committed metrics are a 2,000-episode run (best val 651.0). Stale architecture labels ("6-Channel CNN", "k=3 frame stack", "No MaxPool", "Peak val: 440.0") persisted in `agents/registry.py`, `web/index.html`, `rl/plot_metrics.py`, and GEMINI.
+The README tournament table and the README/GEMINI DQN training claims quoted scores and run configurations that matched neither the committed `results/tournament_results.json` nor the committed training metrics. Stale architecture labels ("6-Channel CNN", "k=3 frame stack", "No MaxPool", a hardcoded peak validation score) persisted in `agents/registry.py`, `web/index.html`, `rl/plot_metrics.py`, and GEMINI.
 
 **Resolution:** All hardcoded experimental results were removed from README/GEMINI in favor of reproduction instructions; the generated artifacts (`results/tournament_results.json`, `rl/weights/`) are now the single source of truth (arena badges already read from them). Architecture labels corrected to the 30-channel dueling encoder; diagnostic figures regenerated.
 
-### [Fixed] Tournament artifact used a 400-move horizon; training/validation use 300
-`core.environment.DEFAULT_MAX_STEPS = 300` is the canonical horizon for DQN training, validation, CEM search, and Q-learning, but the committed tournament results were generated with `--max-moves 400`. The DQN observation contains a `steps_remaining / horizon` channel, so the policy was evaluated out-of-distribution for the final 100 steps of each episode.
+### [Fixed] Tournament artifact used a longer horizon than training/validation
+`core.environment.DEFAULT_MAX_STEPS` is the canonical horizon for DQN training, validation, CEM search, and Q-learning, but the committed tournament results were generated with a larger `--max-moves`. The DQN observation contains a `steps_remaining / horizon` channel, so the policy was evaluated out-of-distribution for the tail of each episode.
 
-**Resolution:** Re-ran the tournament at the canonical horizon (`python compare_baselines.py --episodes 100 --offline`, 300 moves) so the recorded artifact matches training/validation semantics.
+**Resolution:** Re-ran the tournament at the canonical horizon so the recorded artifact matches training/validation semantics.
 
 ## Open findings (not addressed in this round)
 
@@ -96,7 +95,7 @@ The README tournament table claimed 1,000 seeds / 150-move horizon with scores (
 ## Verification
 
 - `python -m unittest discover -s tests` — **15 tests pass** (13 existing + 2 facade guards; the toroidal-tracking test now also pins the explicit `reset()` contract).
-- fp16 buffer push/sample round-trip, deterministic simulator latency (92.0 ms at spawn), a 60-move tournament episode via `run_episode(DQNAgent())`, and a 1-episode DQN smoke training run (warmup + PER sample + masked Double-DQN update + validation + checkpoint) — all passed.
+- fp16 buffer push/sample round-trip, deterministic simulator latency, a 60-move tournament episode via `run_episode(DQNAgent())`, and a 1-episode DQN smoke training run (warmup + PER sample + masked Double-DQN update + validation + checkpoint) — all passed.
 
 ## Still open (deliberately deferred)
 
@@ -104,7 +103,7 @@ The README tournament table claimed 1,000 seeds / 150-move horizon with scores (
 - Structural replay improvements (uint8 split channels, index-linked frame storage) and capacity tuning.
 - Environment-dynamics test gaps (scatter/chase boundaries, ghost tunnel wrap, head-on pass-through).
 - `web_arena.py` single-threaded server blocks during live LLM calls.
-- **Arena DQN horizon saturation (minor)**: neither arena passes `steps_remaining`, so after 300 decisions in an open-ended arena session the horizon channel saturates at 0 ("no time left"). Display-only impact; tournament/training pass it correctly.
+- **Arena DQN horizon saturation (minor)**: neither arena passes `steps_remaining`, so after `DEFAULT_MAX_STEPS` decisions in an open-ended arena session the horizon channel saturates at 0 ("no time left"). Display-only impact; tournament/training pass it correctly.
 
 ---
 
@@ -131,3 +130,27 @@ The README tournament table claimed 1,000 seeds / 150-move horizon with scores (
 - Collision misses Pac-Man stepping onto a ghost's tile when that ghost moves elsewhere.
 - Test scenarios in `tests/test_agents.py` use legal-move lists that don't match the maze; tests are not guarded for missing numpy/torch/pygame.
 - Docs: personal absolute paths in README/GEMINI; stale GEMINI channel description.
+
+---
+
+# Code Review (2026-10-09, round 5: remaining open items)
+
+## Fixed
+
+1. **Pygame worker race on `agent.reset()`** ([pacman_game.py](pacman_game.py)): per-agent locks serialize `decide()` and `reset()`. Resets from the UI thread are non-blocking; if a worker is mid-decision it observes the bumped epoch and resets the agent itself, so stale temporal state can no longer survive `[R]`, an agent switch, a respawn or a level change.
+2. **Collision rule gap** ([core/environment.py](core/environment.py)): Pac-Man stepping onto a ghost's tile while that ghost moved elsewhere was not a hit. The rule is now `pacman_collides()`: same tile, or Pac-Man entered a tile a ghost occupied at the start of the step. **This changes game dynamics: all trained policies (DQN, CEM, TD) predate it and need retraining;** the tournament artifact was regenerated with the existing weights.
+3. **Frontend rule mismatch**: the Pygame arena stopped on victory while the web arena advanced a level; Pygame now advances a level too (score and lives kept, level shown in the HUD).
+4. **Tests**: scenarios in `tests/test_agents.py` take legal moves from the real maze; optional numpy/torch/pygame dependencies skip instead of failing (`pacman_game.py` no longer calls `sys.exit` at import). New `tests/test_environment.py` covers the Scatter/Chase clock, the collision rule, tunnel wrap for Pac-Man and ghosts, and illegal moves; a regression test pins the Pygame reset race (verified to fail without the fix).
+5. **Consistency**: Ollama model/host defaults come from `llm.decision_client` (honouring `OLLAMA_HOST` / `OLLAMA_MODEL`) everywhere; both linear Q agents take `(name, weights_path)`; Greedy uses `margin_confidence` and a tunnel-aware pellet pre-filter; `maze_data.py` facade exports `REACHABLE_CELLS`; PER tracks the max priority instead of scanning the buffer on every push; `llm/test_client.py` renamed to `llm/check_client.py` (manual runner, not collected as a test) with legal moves from the environment.
+6. **Docs**: stale GEMINI channel description and `encode_frame` reference fixed; experiment results and run parameters removed from README, GEMINI, this log and `codex_report.md` (values are referenced by their code constants instead); checkpoint-status notice added.
+
+## Verification
+
+- `python -m unittest discover -s tests` passes in the project venv and, with optional-dependency tests skipped, in a bare Python.
+- Headless Pygame run (level advance, HUD drawing, reset) and `python -m llm.check_client` (offline) completed.
+
+## Still open
+
+- **Retrain** DQN, CEM and TD policies under the corrected collision rule, then regenerate the tournament artifact.
+- Stall truncation exists only in DQN training, so the stall plane is never seen past `STALL_STEPS` at evaluation.
+- Larger structural items: replay storage layout / sum-tree sampling, consolidating the overlapping agent docs (GEMINI.md, codex_report.md), Git LFS for binary artifacts.

@@ -27,7 +27,7 @@ The former six-channel encoder omitted ghost identity, Scatter/Chase phase, head
 - `dqn.md` documents the new DQN observation channels and checkpoint retraining requirement.
 - `core/environment.py` contains the P2 fix and tracks steps without a pellet for DQN observations.
 - The DQN encoder, training pipeline, inference agent, and callers were updated for the P1 fix.
-- The updated 30-channel model was trained for 2,000 episodes (seed 0); the training log reports a best validation score of 651.0 at episode 1,600.
+- Training results for the 30-channel model are recorded only in the `rl/weights/` artifacts; no full training run has been performed since the latest DQN changes.
 
 ## Review limitations
 

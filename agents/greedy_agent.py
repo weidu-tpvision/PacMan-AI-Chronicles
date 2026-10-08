@@ -6,7 +6,8 @@ Balances survival (BFS ghost evasion, dead-end trap detection) with food gatheri
 import time
 from typing import List, Optional, Tuple
 
-from agents.base import DecisionResult, softmax
+from agents.base import DecisionResult, margin_confidence, softmax
+from agents.features import toroidal_manhattan
 from core.maze_data import (
     DIRECTIONS,
     GRID_WIDTH,
@@ -37,13 +38,13 @@ class GreedyHeuristicAgent:
     ) -> DecisionResult:
         t0 = time.perf_counter()
         if not legal_moves:
-            return DecisionResult("left", {}, 0.0, 0.0, False)
+            return DecisionResult("left", {}, 0.0, 0.0, False, error_msg="no legal moves")
 
         px, py = pacman_pos
         scores = {}
-        # Pre-select spatially closest pellets once per decision step
+        # Pre-select spatially closest pellets once per decision step (tunnel-aware)
         nearby_pellets = (
-            sorted(pellets, key=lambda p: abs(px - p[0]) + abs(py - p[1]))[:30]
+            sorted(pellets, key=lambda p: toroidal_manhattan(pacman_pos, p))[:30]
             if pellets else []
         )
 
@@ -95,13 +96,11 @@ class GreedyHeuristicAgent:
         lat = (time.perf_counter() - t0) * 1000.0
 
         dist = softmax(scores, temp=25.0)
-        sorted_probs = sorted(dist.values(), reverse=True)
-        conf = (sorted_probs[0] - sorted_probs[1]) if len(sorted_probs) > 1 else 1.0
 
         return DecisionResult(
             choice=best_move,
             probabilities=dist,
-            confidence=round(conf, 3),
+            confidence=margin_confidence(dist),
             latency_ms=lat,
             is_live=False,
         )

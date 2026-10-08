@@ -31,7 +31,7 @@ class RandomAgent:
     ) -> DecisionResult:
         t0 = time.perf_counter()
         if not legal_moves:
-            return DecisionResult("left", {}, 0.0, 0.0, False)
+            return DecisionResult("left", {}, 0.0, 0.0, False, error_msg="no legal moves")
 
         choice = random.choice(legal_moves)
         prob = 1.0 / len(legal_moves)

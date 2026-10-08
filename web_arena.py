@@ -23,14 +23,14 @@ from agents.registry import build_controllers
 from agents.dqn_agent import DQNAgent
 from core.environment import DEFAULT_MAX_STEPS, SCORE_DEATH, SCORE_PELLET, SCORE_WIN, Environment
 from core.maze_data import WALL_CELLS
-from llm.decision_client import SystemOneAgent
+from llm.decision_client import DEFAULT_MODEL, DEFAULT_OLLAMA_HOST, SystemOneAgent
 
 HTML_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web", "index.html")
 MAX_BODY_BYTES = 4096
 
 
 class GameSession:
-    def __init__(self, model: str = "nimble", host: str = "http://localhost:11434", live: bool = False):
+    def __init__(self, model: str = DEFAULT_MODEL, host: str = DEFAULT_OLLAMA_HOST, live: bool = False):
         self.sys1_backend = SystemOneAgent(model=model, host=host, prefer_live=live)
         self.controllers = build_controllers(self.sys1_backend, model)
         self.active_idx = 1  # Default to DQN
@@ -207,8 +207,8 @@ def main():
     parser = argparse.ArgumentParser(description="Pac-Man Web AI Arena Server")
     parser.add_argument("--port", type=int, default=8080, help="HTTP port (default: 8080)")
     parser.add_argument("--bind", type=str, default="127.0.0.1", help="Bind address (default: 127.0.0.1, local only)")
-    parser.add_argument("--model", type=str, default="nimble", help="Ollama model name for System 1")
-    parser.add_argument("--host", type=str, default="http://localhost:11434", help="Ollama host URL")
+    parser.add_argument("--model", type=str, default=DEFAULT_MODEL, help="Ollama model name for System 1")
+    parser.add_argument("--host", type=str, default=DEFAULT_OLLAMA_HOST, help="Ollama host URL")
     parser.add_argument("--live", action="store_true", help="Query live Ollama for System 1 (default: offline simulator)")
     parser.add_argument("--no-browser", action="store_true", help="Do not open browser automatically")
     args = parser.parse_args()
