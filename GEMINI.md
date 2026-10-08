@@ -76,7 +76,7 @@ system_one/
 │   ├── test_environment.py      # Scatter/Chase clock, collision rule, tunnel wrap
 │   ├── test_facades.py          # Root compatibility facades
 │   ├── test_system_one.py       # Schema and fallback verification
-│   └── test_review_regressions.py # Regression coverage for prior code-review fixes
+│   └── test_review_regressions.py # Regression coverage for previously fixed bugs
 │
 ├── pacman_game.py               # Interactive visual Pygame arena (Live hot-swapping [1]-[6])
 ├── compare_baselines.py         # Multi-agent tournament benchmark runner

@@ -87,11 +87,18 @@ In classical reinforcement learning, policy search methods (such as the Cross-En
 ### Phase 2 DQN Roadmap
 - [x] **Markov-Oriented State Encoding**: Separate current/history maps for each ghost, Pac-Man and ghost headings, scatter/chase phase, stall progress, and remaining episode horizon (30-channel encoder, see `dqn.md`).
 - [x] **Global Receptive Field Pooling & Momentum Shaping**: MaxPool for global pellet perception, anti-stall loop cutoff, directional momentum preservation, and inference anti-orbit dynamic memory.
-- [x] **Standardized Simulation Engine & Authentic Arcade Dynamics**: Unified single simulation engine (`core.environment.Environment`) across desktop Pygame, web arena, training, and tournaments with authentic 28/7 Chase/Scatter cycling and seeded RNG.
+- [x] **Standardized Simulation Engine & Authentic Arcade Dynamics**: Unified single simulation engine (`core.environment.Environment`) across desktop Pygame, web arena, training, and tournaments with authentic Chase/Scatter cycling and seeded RNG.
 - [x] **Automated Training Diagnostics**: Per-episode metrics logging (JSON/CSV) and 4-panel visual figure generation (vector SVG and raster PNG).
 - [x] **Prioritized Experience Replay (PER)**: Replay transitions by TD-error priority with annealed importance-sampling correction.
 - [x] **Dueling DQN Architecture**: Separate state value $V(s)$ and action advantages $A(s, a)$; inference remains compatible with legacy checkpoints.
 - [ ] **Extended Training Run**: Longer runs with cosine learning-rate scheduling; compare best-checkpoint validation means against the feature-based agents on identical seeds before updating the shipped checkpoint.
+- [ ] **Training Resume Support**: the trainer starts from fresh weights and saves only the best model state; resuming needs a full checkpoint format (optimizer, replay buffer, scheduler, exploration, counters, RNG state).
+
+### Open Issues
+- **Retrain all learned policies.** The collision rule was corrected (Pac-Man stepping onto a ghost's tile is a hit even if that ghost moves away). The shipped DQN checkpoint and the CEM / TD weights predate this, so their tournament scores are provisional until retrained and the tournament is regenerated.
+- **Stall truncation is training-only.** DQN training ends an episode after `STALL_STEPS` steps without a pellet, so the stall plane is never seen past that value during evaluation or in the arenas.
+- **Replay buffer structure.** Sampling still scans the whole buffer, and `next_state` is stored separately; a sum-tree and index-linked frame storage would cut both time and RAM.
+- **Repository hygiene.** Large binary/generated artifacts (`.pt`, metrics JSON/CSV, tournament results) are committed directly; consider Git LFS or release assets.
 
 ---
 
@@ -212,7 +219,7 @@ PacMan-AI-Chronicles/
 │   ├── test_environment.py      # Scatter/Chase clock, collision rule, tunnel wrap
 │   ├── test_facades.py          # Root compatibility facades
 │   ├── test_system_one.py       # Ollama schema & response verification test
-│   └── test_review_regressions.py # Regression coverage for prior code-review fixes
+│   └── test_review_regressions.py # Regression coverage for previously fixed bugs
 │
 ├── pacman_game.py               # Interactive Pygame visualizer and arena
 ├── compare_baselines.py         # Head-to-Head tournament runner

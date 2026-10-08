@@ -1,4 +1,4 @@
-"""Regression tests for fixes recorded in CODE_REVIEW.md."""
+"""Regression tests for previously fixed bugs (see git history for the original reports)."""
 
 import importlib.util
 import os
