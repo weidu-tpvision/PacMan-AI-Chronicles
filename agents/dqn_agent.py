@@ -1,6 +1,6 @@
 """
 Deep Q-Network Agent: Executes forward passes on the trained PyTorch CNN model.
-Uses unentangled 6-channel state encoding with velocity/momentum awareness.
+Uses identity-preserving spatial channels with motion and environment-phase features.
 
 Two evaluation modes:
   heuristics=False  -> pure greedy argmax over the network's Q-values (the policy that
@@ -18,6 +18,7 @@ from typing import List, Optional, Tuple
 
 from agents.base import DecisionResult, margin_confidence, softmax
 from agents.paths import resolve_weights_path
+from core.environment import DEFAULT_MAX_STEPS
 from core.maze_data import DIRECTIONS, GRID_WIDTH, OPPOSITE_DIRECTIONS
 
 try:
@@ -58,6 +59,9 @@ class DQNAgent:
         self.prev_ghosts: Optional[List[Tuple[int, int]]] = None
         self.recent_positions: collections.deque = collections.deque(maxlen=16)
         self.last_pellet_count: Optional[int] = None
+        self._mode_step = 0
+        self._decision_count = 0
+        self._steps_without_pellet = 0
         self.model_loaded = False
         self.model = None
         self.model_path = resolve_weights_path(model_path)
@@ -73,6 +77,22 @@ class DQNAgent:
                 state_dict = torch.load(self.model_path, map_location=self.device, weights_only=True)
                 # Preserve inference for checkpoints trained before the dueling head.
                 model = PacmanDQN(in_channels=NUM_CHANNELS, dueling="value_head.weight" in state_dict).to(self.device)
+                first_weight = state_dict.get("conv.0.weight")
+                if first_weight is not None and first_weight.shape[1] == 6:
+                    # Expand legacy merged-ghost channels into the new per-ghost planes.
+                    migrated = model.state_dict()
+                    for key, value in state_dict.items():
+                        if key != "conv.0.weight" and key in migrated and migrated[key].shape == value.shape:
+                            migrated[key] = value
+                    expanded = torch.zeros_like(migrated["conv.0.weight"])
+                    mapping = {0: [0], 1: [1], 2: [2], 4: [3]}
+                    mapping[3] = [4, 5, 6]
+                    mapping[5] = [7, 8, 9]
+                    for old_channel, new_channels in mapping.items():
+                        for new_channel in new_channels:
+                            expanded[:, new_channel] = first_weight[:, old_channel]
+                    migrated["conv.0.weight"] = expanded
+                    state_dict = migrated
                 model.load_state_dict(state_dict)
                 model.eval()
                 self.model = model
@@ -92,6 +112,9 @@ class DQNAgent:
         self.prev_ghosts = None
         self.recent_positions.clear()
         self.last_pellet_count = None
+        self._mode_step = 0
+        self._decision_count = 0
+        self._steps_without_pellet = 0
 
     def decide(
         self,
@@ -100,6 +123,12 @@ class DQNAgent:
         pellets: set,
         legal_moves: List[str],
         last_move: Optional[str] = None,
+        *,
+        mode_step: Optional[int] = None,
+        ghost_dirs: Optional[List[str]] = None,
+        steps_without_pellet: Optional[int] = None,
+        steps_remaining: Optional[int] = None,
+        horizon: int = DEFAULT_MAX_STEPS,
     ) -> DecisionResult:
         t0 = time.perf_counter()
 
@@ -125,8 +154,26 @@ class DQNAgent:
         curr_pellets = len(pellets)
         if self.last_pellet_count is None or curr_pellets != self.last_pellet_count:
             self.recent_positions.clear()
+            self._steps_without_pellet = 0
             self.last_pellet_count = curr_pellets
+        else:
+            self._steps_without_pellet += 1
         self.recent_positions.append(tuple(pacman_pos))
+
+        if ghost_dirs is None:
+            inferred_dirs = []
+            for index, pos in enumerate(ghost_positions):
+                previous = self.prev_ghosts[index] if self.prev_ghosts and index < len(self.prev_ghosts) else pos
+                dx = (pos[0] - previous[0]) % GRID_WIDTH
+                if dx == GRID_WIDTH - 1:
+                    dx = -1
+                delta = (dx, pos[1] - previous[1])
+                inferred_dirs.append({(0, -1): "up", (0, 1): "down", (-1, 0): "left", (1, 0): "right"}.get(delta, "up"))
+            ghost_dirs = inferred_dirs
+
+        effective_mode_step = self._mode_step if mode_step is None else mode_step
+        effective_stall_steps = self._steps_without_pellet if steps_without_pellet is None else steps_without_pellet
+        effective_remaining = max(0, horizon - self._decision_count) if steps_remaining is None else steps_remaining
 
         state_arr = encode_state(
             pacman_pos=pacman_pos,
@@ -134,11 +181,19 @@ class DQNAgent:
             pellets=pellets,
             prev_pacman_pos=self.prev_pacman,
             prev_ghost_positions=self.prev_ghosts,
+            last_move=last_move,
+            ghost_dirs=ghost_dirs,
+            mode_step=effective_mode_step,
+            steps_without_pellet=effective_stall_steps,
+            steps_remaining=effective_remaining,
+            horizon=horizon,
         )
 
         # Update previous positions for next step
         self.prev_pacman = tuple(pacman_pos)
         self.prev_ghosts = [tuple(g) for g in ghost_positions]
+        self._mode_step = effective_mode_step + 1
+        self._decision_count += 1
 
         with torch.no_grad():
             s_tensor = torch.from_numpy(state_arr).unsqueeze(0).to(self.device)

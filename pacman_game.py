@@ -22,6 +22,7 @@ except ImportError:
     sys.exit(1)
 
 from agents.base import DecisionResult
+from agents.dqn_agent import DQNAgent
 from agents.registry import build_controllers
 from core.environment import SCORE_DEATH, SCORE_PELLET, SCORE_WIN, Environment
 from core.maze_data import GRID_HEIGHT, GRID_WIDTH
@@ -184,12 +185,20 @@ class PacmanGame:
             pellets_copy = set(self.pellets)
             legal_copy = list(legal_moves)
             last_move = self.last_move
+            mode_step = self.env.mode_step
+            ghost_dirs = list(self.env.ghost_dirs)
+            steps_without_pellet = self.env.steps_without_pellet
             active_agent = self.current_controller["agent"]
 
         def worker():
-            res = active_agent.decide(
-                pac_pos, ghost_pos, pellets_copy, legal_copy, last_move
-            )
+            if isinstance(active_agent, DQNAgent):
+                res = active_agent.decide(
+                    pac_pos, ghost_pos, pellets_copy, legal_copy, last_move,
+                    mode_step=mode_step, ghost_dirs=ghost_dirs,
+                    steps_without_pellet=steps_without_pellet,
+                )
+            else:
+                res = active_agent.decide(pac_pos, ghost_pos, pellets_copy, legal_copy, last_move)
             with self.decision_lock:
                 if request_epoch == self.decision_epoch:
                     self.latest_decision_result = res

@@ -38,7 +38,7 @@ What happens when you pit modern **Generative AI (Large Language Models)** again
 | Hotkey | Agent Name | Paradigm | Technical Implementation | Inference Latency |
 | :-: | :--- | :--- | :--- | :-: |
 | **[1]** | **Policy-Optimized RL** | *Evolutionary / Policy Search* | Cross-Entropy Method optimizing topological graph features (Junctions, traps, BFS). | `0.03 ms` |
-| **[2]** | **Deep Q-Network (DQN)** | *Deep Reinforcement Learning* | Unentangled 6-channel binary state $\rightarrow$ 2D ConvNet with 10×10 receptive field pooling $\rightarrow$ Double-DQN. | `0.26 ms` |
+| **[2]** | **Deep Q-Network (DQN)** | *Deep Reinforcement Learning* | Identity-preserving spatial state with motion, mode, stall, and horizon features $\rightarrow$ ConvNet $\rightarrow$ Double-DQN. | `0.26 ms` |
 | **[3]** | **System 1 (LLM)** | *Foundation Model Zero-Shot* | Structured JSON / spatial reasoning via Ollama `POST /v1/systemone`. | `93.4 ms` |
 | **[4]** | **Greedy Heuristic** | *Symbolic / Expert Rules* | Hand-crafted priority rules balancing BFS food seeking and ghost evasion. | `0.02 ms` |
 | **[5]** | **Textbook Q-Learning** | *Classical TD-Learning* | Bellman equation updates on classic linear feature approximations. | `0.01 ms` |
@@ -76,12 +76,12 @@ All agents competed on the identical 19×21 maze layout across 1,000 determinist
 In classical reinforcement learning, policy search methods (such as the Cross-Entropy Method) can quickly converge to high scores when supplied with **human-engineered features** (`dead_end_trap`, `safe_junction`, BFS distance maps). However, this introduces a hard limitation: **the policy's intelligence is strictly bounded by human domain knowledge and representation bias**.
 
 **The Deep Q-Network (DQN) operates on a fundamentally purer principle:**
-- **Zero Human Guidance:** It receives only a raw 4-channel spatial grid tensor (walls, Pac-Man, ghosts, pellets).
+- **Spatial State Learning:** It receives symbolic maze maps with separate actor identities, motion, and environment-state features.
 - **Autonomous Representation Learning:** The convolutional filters learn their own spatial kernels for corridor recognition, proximity gradients, and escape pathways directly from Bellman temporal difference errors.
 - **Unbounded Potential:** In our initial Phase 1 training run (1,200 episodes, ~12 minutes on CPU), DQN already reached **570.0 points** and **0.27 ms inference**. Because its representation capacity is vast and unconstrained by linear assumptions, extended training is expected to surpass all handcrafted heuristics.
 
 ### Phase 2 DQN Roadmap
-- [x] **Unentangled Multi-Channel Frame Stacking (6 Channels)**: Separated discrete binary channels for Walls, Pellets, Pac-Man $(t, t-1)$, and Ghosts $(t, t-1)$ to eliminate ReLU sign ambiguity while capturing velocity vectors.
+- [x] **Markov-Oriented State Encoding**: Separate current/history maps for each ghost, Pac-Man and ghost headings, scatter/chase phase, stall progress, and remaining episode horizon.
 - [x] **Global Receptive Field Pooling & Momentum Shaping**: 10×10 pooling for global pellet perception, anti-stall loop cutoff, directional momentum preservation, and inference anti-orbit dynamic memory.
 - [x] **Standardized Simulation Engine & Authentic Arcade Dynamics**: Unified single simulation engine (`core.environment.Environment`) across desktop Pygame, web arena, training, and tournaments with authentic 28/7 Chase/Scatter cycling and seeded RNG.
 - [x] **Automated Training Diagnostics**: Real-time metrics logging and 4-panel visual figure generation (vector SVG and raster PNG).
@@ -167,7 +167,7 @@ PacMan-AI-Chronicles/
 │
 ├── rl/                          # Reinforcement Learning Subsystem
 │   ├── __init__.py              # Unified exports for RL models & algorithms
-│   ├── dqn_model.py             # PacmanDQN CNN & 6-channel unentangled binary state encoder
+│   ├── dqn_model.py             # PacmanDQN CNN & identity-preserving state encoder
 │   ├── train_dqn.py             # Double-DQN training pipeline with ReplayBuffer & metrics
 │   ├── plot_metrics.py          # Diagnostic figure generator (SVG vector & PNG raster)
 │   ├── train_q_learning.py      # Approximate TD Q-learning trainer

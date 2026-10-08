@@ -1,115 +1,55 @@
 ======================================================================
- DEEP Q-NETWORK (DQN) TRAINING: 6-Channel Velocity-Aware CNN
+ DEEP Q-NETWORK (DQN) TRAINING: 30-Channel State Encoder
 ======================================================================
 Device: cpu | Batch Size: 64 | Learning Rate: 0.0005 | Seed: 0
-Episodes: 5000 | Horizon: 300 | Target Sync: every 400 steps
+Episodes: 2000 | Horizon: 300 | Target Sync: every 400 steps
 Validation: 20 VAL seeds every 50 episodes (pure greedy policy)
 
 Warming up replay buffer with 1,000 random-policy steps...
 Warm-up complete! Beginning DQN neural optimization...
 
-Ep 0050/5000 | Train Avg(50): -115.6 | Val Score:   34.5 (Pellets: 23.4) | eps: 0.88 | lr: 5.00e-04 | Time:   37s [* SAVED BEST]
-Ep 0100/5000 | Train Avg(50):  -96.2 | Val Score:  -44.0 (Pellets: 15.6) | eps: 0.78 | lr: 5.00e-04 | Time:   81s
-Ep 0150/5000 | Train Avg(50):  -89.0 | Val Score:  -34.5 (Pellets: 16.6) | eps: 0.69 | lr: 4.99e-04 | Time:  124s
-Ep 0200/5000 | Train Avg(50):  -70.2 | Val Score:  -38.0 (Pellets: 16.2) | eps: 0.61 | lr: 4.98e-04 | Time:  172s
-Ep 0250/5000 | Train Avg(50):  -30.0 | Val Score:   37.0 (Pellets: 23.7) | eps: 0.53 | lr: 4.97e-04 | Time:  236s [* SAVED BEST]
-Ep 0300/5000 | Train Avg(50):  -30.0 | Val Score:   73.0 (Pellets: 27.3) | eps: 0.47 | lr: 4.96e-04 | Time:  294s [* SAVED BEST]
-Ep 0350/5000 | Train Avg(50):  -17.6 | Val Score:  150.5 (Pellets: 35.0) | eps: 0.42 | lr: 4.95e-04 | Time:  353s [* SAVED BEST]
-Ep 0400/5000 | Train Avg(50):   33.2 | Val Score:  190.5 (Pellets: 39.0) | eps: 0.37 | lr: 4.93e-04 | Time:  432s [* SAVED BEST]
-Ep 0450/5000 | Train Avg(50):   25.8 | Val Score:  118.5 (Pellets: 31.9) | eps: 0.32 | lr: 4.91e-04 | Time:  519s
-Ep 0500/5000 | Train Avg(50):    6.8 | Val Score:  170.0 (Pellets: 37.0) | eps: 0.29 | lr: 4.89e-04 | Time:  587s
-Ep 0550/5000 | Train Avg(50):  115.6 | Val Score:  175.0 (Pellets: 37.5) | eps: 0.25 | lr: 4.87e-04 | Time:  685s
-Ep 0600/5000 | Train Avg(50):  105.2 | Val Score:  218.0 (Pellets: 41.8) | eps: 0.22 | lr: 4.84e-04 | Time:  775s [* SAVED BEST]
-Ep 0650/5000 | Train Avg(50):  175.8 | Val Score:  294.5 (Pellets: 49.5) | eps: 0.20 | lr: 4.81e-04 | Time:  882s [* SAVED BEST]
-Ep 0700/5000 | Train Avg(50):  180.8 | Val Score:  321.5 (Pellets: 52.1) | eps: 0.17 | lr: 4.79e-04 | Time:  985s [* SAVED BEST]
-Ep 0750/5000 | Train Avg(50):  163.0 | Val Score:  360.5 (Pellets: 55.0) | eps: 0.15 | lr: 4.75e-04 | Time: 1088s [* SAVED BEST]
-Ep 0800/5000 | Train Avg(50):  183.8 | Val Score:  370.0 (Pellets: 56.0) | eps: 0.13 | lr: 4.72e-04 | Time: 1196s [* SAVED BEST]
-Ep 0850/5000 | Train Avg(50):  222.6 | Val Score:  371.0 (Pellets: 56.1) | eps: 0.12 | lr: 4.69e-04 | Time: 1410s [* SAVED BEST]
-Ep 0900/5000 | Train Avg(50):  262.6 | Val Score:  404.0 (Pellets: 57.4) | eps: 0.11 | lr: 4.65e-04 | Time: 1714s [* SAVED BEST]
-Ep 0950/5000 | Train Avg(50):  298.8 | Val Score:  343.5 (Pellets: 54.4) | eps: 0.09 | lr: 4.61e-04 | Time: 1964s
-Ep 1000/5000 | Train Avg(50):  302.2 | Val Score:  407.0 (Pellets: 60.7) | eps: 0.08 | lr: 4.57e-04 | Time: 2228s [* SAVED BEST]
-Ep 1050/5000 | Train Avg(50):  288.4 | Val Score:  386.0 (Pellets: 58.6) | eps: 0.07 | lr: 4.53e-04 | Time: 2442s
-Ep 1100/5000 | Train Avg(50):  336.0 | Val Score:  254.0 (Pellets: 45.4) | eps: 0.06 | lr: 4.48e-04 | Time: 2744s
-Ep 1150/5000 | Train Avg(50):  339.8 | Val Score:  483.5 (Pellets: 68.3) | eps: 0.06 | lr: 4.44e-04 | Time: 2936s [* SAVED BEST]
-Ep 1200/5000 | Train Avg(50):  406.0 | Val Score:  381.0 (Pellets: 58.1) | eps: 0.05 | lr: 4.39e-04 | Time: 3226s
-Ep 1250/5000 | Train Avg(50):  391.2 | Val Score:  492.5 (Pellets: 69.2) | eps: 0.05 | lr: 4.34e-04 | Time: 3558s [* SAVED BEST]
-Ep 1300/5000 | Train Avg(50):  366.8 | Val Score:  383.5 (Pellets: 58.4) | eps: 0.05 | lr: 4.29e-04 | Time: 3695s
-Ep 1350/5000 | Train Avg(50):  350.4 | Val Score:  410.5 (Pellets: 61.0) | eps: 0.05 | lr: 4.24e-04 | Time: 3831s
-Ep 1400/5000 | Train Avg(50):  372.4 | Val Score:  473.5 (Pellets: 67.3) | eps: 0.05 | lr: 4.18e-04 | Time: 3978s
-Ep 1450/5000 | Train Avg(50):  439.6 | Val Score:  546.5 (Pellets: 74.7) | eps: 0.05 | lr: 4.13e-04 | Time: 4139s [* SAVED BEST]
-Ep 1500/5000 | Train Avg(50):  384.2 | Val Score:  538.5 (Pellets: 73.8) | eps: 0.05 | lr: 4.07e-04 | Time: 4362s
-Ep 1550/5000 | Train Avg(50):  416.2 | Val Score:  542.5 (Pellets: 74.2) | eps: 0.05 | lr: 4.01e-04 | Time: 4635s
-Ep 1600/5000 | Train Avg(50):  452.4 | Val Score:  529.5 (Pellets: 73.0) | eps: 0.05 | lr: 3.96e-04 | Time: 4924s
-Ep 1650/5000 | Train Avg(50):  421.0 | Val Score:  465.5 (Pellets: 66.5) | eps: 0.05 | lr: 3.90e-04 | Time: 5197s
-Ep 1700/5000 | Train Avg(50):  389.6 | Val Score:  537.5 (Pellets: 73.8) | eps: 0.05 | lr: 3.83e-04 | Time: 5441s
-Ep 1750/5000 | Train Avg(50):  391.8 | Val Score:  530.5 (Pellets: 73.0) | eps: 0.05 | lr: 3.77e-04 | Time: 5634s
-Ep 1800/5000 | Train Avg(50):  449.4 | Val Score:  535.5 (Pellets: 73.5) | eps: 0.05 | lr: 3.71e-04 | Time: 5923s
-Ep 1850/5000 | Train Avg(50):  402.0 | Val Score:  558.5 (Pellets: 74.8) | eps: 0.05 | lr: 3.64e-04 | Time: 6207s [* SAVED BEST]
-Ep 1900/5000 | Train Avg(50):  434.6 | Val Score:  580.5 (Pellets: 77.0) | eps: 0.05 | lr: 3.58e-04 | Time: 6488s [* SAVED BEST]
-Ep 1950/5000 | Train Avg(50):  445.6 | Val Score:  605.0 (Pellets: 79.5) | eps: 0.05 | lr: 3.51e-04 | Time: 6777s [* SAVED BEST]
-Ep 2000/5000 | Train Avg(50):  364.2 | Val Score:  633.5 (Pellets: 82.3) | eps: 0.05 | lr: 3.45e-04 | Time: 6957s [* SAVED BEST]
-Ep 2050/5000 | Train Avg(50):  490.4 | Val Score:  631.0 (Pellets: 82.1) | eps: 0.05 | lr: 3.38e-04 | Time: 7261s
-Ep 2100/5000 | Train Avg(50):  404.6 | Val Score:  588.5 (Pellets: 78.8) | eps: 0.05 | lr: 3.31e-04 | Time: 7512s
-Ep 2150/5000 | Train Avg(50):  446.4 | Val Score:  626.5 (Pellets: 80.7) | eps: 0.05 | lr: 3.24e-04 | Time: 7794s
-Ep 2200/5000 | Train Avg(50):  453.8 | Val Score:  518.0 (Pellets: 70.8) | eps: 0.05 | lr: 3.17e-04 | Time: 38511s
-Ep 2250/5000 | Train Avg(50):  455.8 | Val Score:  612.5 (Pellets: 81.2) | eps: 0.05 | lr: 3.10e-04 | Time: 38672s
-Ep 2300/5000 | Train Avg(50):  494.0 | Val Score:  628.0 (Pellets: 81.8) | eps: 0.05 | lr: 3.03e-04 | Time: 38823s
-Ep 2350/5000 | Train Avg(50):  383.8 | Val Score:  534.5 (Pellets: 73.5) | eps: 0.05 | lr: 2.96e-04 | Time: 38935s
-Ep 2400/5000 | Train Avg(50):  474.8 | Val Score:  571.5 (Pellets: 77.2) | eps: 0.05 | lr: 2.89e-04 | Time: 39084s
-Ep 2450/5000 | Train Avg(50):  499.2 | Val Score:  566.0 (Pellets: 76.6) | eps: 0.05 | lr: 2.82e-04 | Time: 39276s
-Ep 2500/5000 | Train Avg(50):  481.4 | Val Score:  618.5 (Pellets: 81.8) | eps: 0.05 | lr: 2.75e-04 | Time: 39420s
-Ep 2550/5000 | Train Avg(50):  451.2 | Val Score:  579.5 (Pellets: 78.0) | eps: 0.05 | lr: 2.68e-04 | Time: 39556s
-Ep 2600/5000 | Train Avg(50):  467.8 | Val Score:  682.5 (Pellets: 87.2) | eps: 0.05 | lr: 2.61e-04 | Time: 39699s [* SAVED BEST]
-Ep 2650/5000 | Train Avg(50):  555.2 | Val Score:  647.0 (Pellets: 84.7) | eps: 0.05 | lr: 2.54e-04 | Time: 39860s
-Ep 2700/5000 | Train Avg(50):  528.2 | Val Score:  627.0 (Pellets: 82.7) | eps: 0.05 | lr: 2.47e-04 | Time: 40022s
-Ep 2750/5000 | Train Avg(50):  498.2 | Val Score:  634.0 (Pellets: 83.4) | eps: 0.05 | lr: 2.40e-04 | Time: 40166s
-Ep 2800/5000 | Train Avg(50):  442.0 | Val Score:  656.5 (Pellets: 83.7) | eps: 0.05 | lr: 2.33e-04 | Time: 40309s
-Ep 2850/5000 | Train Avg(50):  466.6 | Val Score:  615.0 (Pellets: 81.5) | eps: 0.05 | lr: 2.26e-04 | Time: 40457s
-Ep 2900/5000 | Train Avg(50):  471.4 | Val Score:  616.5 (Pellets: 81.7) | eps: 0.05 | lr: 2.19e-04 | Time: 40599s
-Ep 2950/5000 | Train Avg(50):  487.6 | Val Score:  645.0 (Pellets: 84.5) | eps: 0.05 | lr: 2.12e-04 | Time: 40745s
-Ep 3000/5000 | Train Avg(50):  544.2 | Val Score:  526.5 (Pellets: 72.7) | eps: 0.05 | lr: 2.05e-04 | Time: 40938s
-Ep 3050/5000 | Train Avg(50):  449.6 | Val Score:  745.0 (Pellets: 92.5) | eps: 0.05 | lr: 1.99e-04 | Time: 41159s [* SAVED BEST]
-Ep 3100/5000 | Train Avg(50):  525.6 | Val Score:  713.5 (Pellets: 90.3) | eps: 0.05 | lr: 1.92e-04 | Time: 41386s
-Ep 3150/5000 | Train Avg(50):  538.0 | Val Score:  636.0 (Pellets: 82.6) | eps: 0.05 | lr: 1.86e-04 | Time: 41635s
-Ep 3200/5000 | Train Avg(50):  466.8 | Val Score:  662.0 (Pellets: 85.2) | eps: 0.05 | lr: 1.79e-04 | Time: 41862s
-Ep 3250/5000 | Train Avg(50):  485.8 | Val Score:  690.5 (Pellets: 88.0) | eps: 0.05 | lr: 1.73e-04 | Time: 42052s
-Ep 3300/5000 | Train Avg(50):  484.4 | Val Score:  644.0 (Pellets: 84.4) | eps: 0.05 | lr: 1.67e-04 | Time: 42264s
-Ep 3350/5000 | Train Avg(50):  491.0 | Val Score:  623.0 (Pellets: 82.3) | eps: 0.05 | lr: 1.60e-04 | Time: 42471s
-Ep 3400/5000 | Train Avg(50):  477.4 | Val Score:  670.5 (Pellets: 87.0) | eps: 0.05 | lr: 1.54e-04 | Time: 42618s
-Ep 3450/5000 | Train Avg(50):  482.8 | Val Score:  586.0 (Pellets: 78.6) | eps: 0.05 | lr: 1.49e-04 | Time: 42801s
-Ep 3500/5000 | Train Avg(50):  518.8 | Val Score:  675.0 (Pellets: 86.5) | eps: 0.05 | lr: 1.43e-04 | Time: 42959s
-Ep 3550/5000 | Train Avg(50):  498.4 | Val Score:  680.5 (Pellets: 87.0) | eps: 0.05 | lr: 1.37e-04 | Time: 43112s
-Ep 3600/5000 | Train Avg(50):  574.0 | Val Score:  672.0 (Pellets: 87.2) | eps: 0.05 | lr: 1.32e-04 | Time: 43274s
-Ep 3650/5000 | Train Avg(50):  503.2 | Val Score:  686.0 (Pellets: 88.6) | eps: 0.05 | lr: 1.26e-04 | Time: 43416s
-Ep 3700/5000 | Train Avg(50):  643.4 | Val Score:  769.5 (Pellets: 97.0) | eps: 0.05 | lr: 1.21e-04 | Time: 43609s [* SAVED BEST]
-Ep 3750/5000 | Train Avg(50):  599.2 | Val Score:  661.5 (Pellets: 86.2) | eps: 0.05 | lr: 1.16e-04 | Time: 43783s
-Ep 3800/5000 | Train Avg(50):  610.6 | Val Score:  766.5 (Pellets: 96.7) | eps: 0.05 | lr: 1.11e-04 | Time: 43964s
-Ep 3850/5000 | Train Avg(50):  572.4 | Val Score:  741.5 (Pellets: 93.2) | eps: 0.05 | lr: 1.06e-04 | Time: 44123s
-Ep 3900/5000 | Train Avg(50):  572.0 | Val Score:  862.5 (Pellets: 105.2) | eps: 0.05 | lr: 1.02e-04 | Time: 44290s [* SAVED BEST]
-Ep 3950/5000 | Train Avg(50):  619.2 | Val Score:  841.5 (Pellets: 101.2) | eps: 0.05 | lr: 9.72e-05 | Time: 44462s
-Ep 4000/5000 | Train Avg(50):  578.4 | Val Score:  881.5 (Pellets: 108.2) | eps: 0.05 | lr: 9.30e-05 | Time: 44616s [* SAVED BEST]
-Ep 4050/5000 | Train Avg(50):  511.6 | Val Score:  824.5 (Pellets: 101.5) | eps: 0.05 | lr: 8.89e-05 | Time: 44762s
-Ep 4100/5000 | Train Avg(50):  565.6 | Val Score:  789.0 (Pellets: 98.9) | eps: 0.05 | lr: 8.50e-05 | Time: 44920s
-Ep 4150/5000 | Train Avg(50):  516.2 | Val Score:  828.0 (Pellets: 101.8) | eps: 0.05 | lr: 8.13e-05 | Time: 45065s
-Ep 4200/5000 | Train Avg(50):  623.4 | Val Score:  816.0 (Pellets: 100.6) | eps: 0.05 | lr: 7.78e-05 | Time: 45261s
-Ep 4250/5000 | Train Avg(50):  506.2 | Val Score:  793.5 (Pellets: 99.3) | eps: 0.05 | lr: 7.45e-05 | Time: 45513s
-Ep 4300/5000 | Train Avg(50):  673.4 | Val Score:  854.5 (Pellets: 105.5) | eps: 0.05 | lr: 7.14e-05 | Time: 45805s
-Ep 4350/5000 | Train Avg(50):  549.2 | Val Score:  823.5 (Pellets: 102.3) | eps: 0.05 | lr: 6.85e-05 | Time: 46034s
-Ep 4400/5000 | Train Avg(50):  526.6 | Val Score:  854.0 (Pellets: 104.4) | eps: 0.05 | lr: 6.58e-05 | Time: 46239s
-Ep 4450/5000 | Train Avg(50):  562.4 | Val Score:  839.0 (Pellets: 101.9) | eps: 0.05 | lr: 6.33e-05 | Time: 46447s
-Ep 4500/5000 | Train Avg(50):  504.2 | Val Score:  779.5 (Pellets: 98.0) | eps: 0.05 | lr: 6.10e-05 | Time: 46675s
-Ep 4550/5000 | Train Avg(50):  600.4 | Val Score:  781.5 (Pellets: 98.2) | eps: 0.05 | lr: 5.89e-05 | Time: 46940s
-Ep 4600/5000 | Train Avg(50):  622.2 | Val Score:  833.5 (Pellets: 101.3) | eps: 0.05 | lr: 5.71e-05 | Time: 47207s
-Ep 4650/5000 | Train Avg(50):  589.6 | Val Score:  834.0 (Pellets: 102.4) | eps: 0.05 | lr: 5.54e-05 | Time: 47406s
-Ep 4700/5000 | Train Avg(50):  593.2 | Val Score:  824.5 (Pellets: 99.5) | eps: 0.05 | lr: 5.40e-05 | Time: 47655s
-Ep 4750/5000 | Train Avg(50):  594.8 | Val Score:  836.5 (Pellets: 101.7) | eps: 0.05 | lr: 5.28e-05 | Time: 47832s
-Ep 4800/5000 | Train Avg(50):  568.0 | Val Score:  893.5 (Pellets: 105.3) | eps: 0.05 | lr: 5.18e-05 | Time: 48002s [* SAVED BEST]
-Ep 4850/5000 | Train Avg(50):  619.6 | Val Score:  969.0 (Pellets: 115.9) | eps: 0.05 | lr: 5.10e-05 | Time: 48192s [* SAVED BEST]
-Ep 4900/5000 | Train Avg(50):  567.2 | Val Score: 1018.0 (Pellets: 117.8) | eps: 0.05 | lr: 5.04e-05 | Time: 48355s [* SAVED BEST]
-Ep 4950/5000 | Train Avg(50):  638.8 | Val Score:  760.0 (Pellets: 96.0) | eps: 0.05 | lr: 5.01e-05 | Time: 48536s
-Ep 5000/5000 | Train Avg(50):  681.6 | Val Score:  810.5 (Pellets: 99.0) | eps: 0.05 | lr: 5.00e-05 | Time: 48723s
+Ep 0050/2000 | Train Avg(50):  -98.2 | Val Score:  108.0 (Pellets: 30.8) | eps: 0.88 | lr: 4.99e-04 | Time:   56s [* SAVED BEST]
+Ep 0100/2000 | Train Avg(50):  -85.0 | Val Score:   98.5 (Pellets: 29.9) | eps: 0.78 | lr: 4.97e-04 | Time:  114s
+Ep 0150/2000 | Train Avg(50):  -78.0 | Val Score:   -6.5 (Pellets: 19.4) | eps: 0.69 | lr: 4.94e-04 | Time:  171s
+Ep 0200/2000 | Train Avg(50):  -74.2 | Val Score:  -69.0 (Pellets: 13.1) | eps: 0.61 | lr: 4.89e-04 | Time:  230s
+Ep 0250/2000 | Train Avg(50):  -29.6 | Val Score:   11.5 (Pellets: 21.1) | eps: 0.53 | lr: 4.83e-04 | Time:  312s
+Ep 0300/2000 | Train Avg(50):  -23.2 | Val Score:   80.5 (Pellets: 28.1) | eps: 0.47 | lr: 4.75e-04 | Time:  401s
+Ep 0350/2000 | Train Avg(50):  -26.6 | Val Score:  141.5 (Pellets: 34.1) | eps: 0.42 | lr: 4.67e-04 | Time:  483s [* SAVED BEST]
+Ep 0400/2000 | Train Avg(50):  -12.6 | Val Score:  106.5 (Pellets: 30.6) | eps: 0.37 | lr: 4.57e-04 | Time:  565s
+Ep 0450/2000 | Train Avg(50):   56.8 | Val Score:   96.5 (Pellets: 29.6) | eps: 0.32 | lr: 4.46e-04 | Time:  688s
+Ep 0500/2000 | Train Avg(50):   20.0 | Val Score:  159.5 (Pellets: 36.0) | eps: 0.29 | lr: 4.34e-04 | Time:  800s [* SAVED BEST]
+Ep 0550/2000 | Train Avg(50):   26.8 | Val Score:  133.0 (Pellets: 33.3) | eps: 0.25 | lr: 4.21e-04 | Time:  906s
+Ep 0600/2000 | Train Avg(50):   94.4 | Val Score:  195.5 (Pellets: 39.5) | eps: 0.22 | lr: 4.07e-04 | Time: 1057s [* SAVED BEST]
+Ep 0650/2000 | Train Avg(50):   90.6 | Val Score:  214.5 (Pellets: 40.5) | eps: 0.20 | lr: 3.93e-04 | Time: 1178s [* SAVED BEST]
+Ep 0700/2000 | Train Avg(50):  148.8 | Val Score:  270.0 (Pellets: 47.0) | eps: 0.17 | lr: 3.77e-04 | Time: 1322s [* SAVED BEST]
+Ep 0750/2000 | Train Avg(50):  122.6 | Val Score:  345.0 (Pellets: 54.5) | eps: 0.15 | lr: 3.61e-04 | Time: 1451s [* SAVED BEST]
+Ep 0800/2000 | Train Avg(50):  181.0 | Val Score:  374.0 (Pellets: 57.4) | eps: 0.13 | lr: 3.45e-04 | Time: 1605s [* SAVED BEST]
+Ep 0850/2000 | Train Avg(50):  240.8 | Val Score:  316.0 (Pellets: 51.6) | eps: 0.12 | lr: 3.28e-04 | Time: 1790s
+Ep 0900/2000 | Train Avg(50):  285.6 | Val Score:  302.5 (Pellets: 50.2) | eps: 0.11 | lr: 3.10e-04 | Time: 2536s
+Ep 0950/2000 | Train Avg(50):  237.0 | Val Score:  257.0 (Pellets: 45.7) | eps: 0.09 | lr: 2.93e-04 | Time: 2694s
+Ep 1000/2000 | Train Avg(50):  252.2 | Val Score:  320.0 (Pellets: 52.0) | eps: 0.08 | lr: 2.75e-04 | Time: 2838s
+Ep 1050/2000 | Train Avg(50):  299.2 | Val Score:  346.5 (Pellets: 54.6) | eps: 0.07 | lr: 2.57e-04 | Time: 2997s
+Ep 1100/2000 | Train Avg(50):  335.2 | Val Score:  393.0 (Pellets: 59.3) | eps: 0.06 | lr: 2.40e-04 | Time: 3167s [* SAVED BEST]
+Ep 1150/2000 | Train Avg(50):  333.6 | Val Score:  396.0 (Pellets: 59.6) | eps: 0.06 | lr: 2.22e-04 | Time: 3321s [* SAVED BEST]
+Ep 1200/2000 | Train Avg(50):  358.2 | Val Score:  449.5 (Pellets: 65.0) | eps: 0.05 | lr: 2.05e-04 | Time: 3498s [* SAVED BEST]
+Ep 1250/2000 | Train Avg(50):  379.0 | Val Score:  467.0 (Pellets: 66.7) | eps: 0.05 | lr: 1.89e-04 | Time: 3675s [* SAVED BEST]
+Ep 1300/2000 | Train Avg(50):  435.2 | Val Score:  470.0 (Pellets: 67.0) | eps: 0.05 | lr: 1.73e-04 | Time: 3874s [* SAVED BEST]
+Ep 1350/2000 | Train Avg(50):  411.6 | Val Score:  418.0 (Pellets: 61.8) | eps: 0.05 | lr: 1.57e-04 | Time: 4079s
+Ep 1400/2000 | Train Avg(50):  413.6 | Val Score:  575.5 (Pellets: 77.5) | eps: 0.05 | lr: 1.43e-04 | Time: 4250s [* SAVED BEST]
+Ep 1450/2000 | Train Avg(50):  381.6 | Val Score:  525.0 (Pellets: 72.5) | eps: 0.05 | lr: 1.29e-04 | Time: 4424s
+Ep 1500/2000 | Train Avg(50):  402.6 | Val Score:  454.5 (Pellets: 65.5) | eps: 0.05 | lr: 1.16e-04 | Time: 4590s
+Ep 1550/2000 | Train Avg(50):  503.8 | Val Score:  431.5 (Pellets: 63.1) | eps: 0.05 | lr: 1.04e-04 | Time: 4782s
+Ep 1600/2000 | Train Avg(50):  504.2 | Val Score:  651.0 (Pellets: 85.1) | eps: 0.05 | lr: 9.30e-05 | Time: 5008s [* SAVED BEST]
+Ep 1650/2000 | Train Avg(50):  410.6 | Val Score:  622.0 (Pellets: 82.2) | eps: 0.05 | lr: 8.32e-05 | Time: 5180s
+Ep 1700/2000 | Train Avg(50):  520.4 | Val Score:  542.5 (Pellets: 74.2) | eps: 0.05 | lr: 7.45e-05 | Time: 5398s
+Ep 1750/2000 | Train Avg(50):  468.2 | Val Score:  599.5 (Pellets: 80.0) | eps: 0.05 | lr: 6.71e-05 | Time: 5602s
+Ep 1800/2000 | Train Avg(50):  523.4 | Val Score:  574.5 (Pellets: 77.5) | eps: 0.05 | lr: 6.10e-05 | Time: 5822s
+Ep 1850/2000 | Train Avg(50):  500.2 | Val Score:  621.0 (Pellets: 82.1) | eps: 0.05 | lr: 5.62e-05 | Time: 6006s
+Ep 1900/2000 | Train Avg(50):  490.0 | Val Score:  590.5 (Pellets: 79.0) | eps: 0.05 | lr: 5.28e-05 | Time: 6209s
+Ep 1950/2000 | Train Avg(50):  530.2 | Val Score:  592.0 (Pellets: 79.2) | eps: 0.05 | lr: 5.07e-05 | Time: 6420s
+Ep 2000/2000 | Train Avg(50):  515.0 | Val Score:  606.5 (Pellets: 80.7) | eps: 0.05 | lr: 5.00e-05 | Time: 6625s
 
 ======================================================================
- TRAINING COMPLETE! Best Checkpoint Saved to rl/weights/dqn_pacman.pt
- Best Validation Score: 1018.0 (episode 4900)
+ TRAINING COMPLETE! Best Checkpoint Saved to C:\Users\wei.du\WorkAtTPVision\test\system_one\rl\weights\dqn_pacman.pt
+ Best Validation Score: 651.0 (episode 1600)
 ======================================================================

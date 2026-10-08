@@ -45,6 +45,7 @@ class Environment:
         self.rng = random.Random(seed)
         self.step_count = 0
         self.mode_step = 0  # Scatter/Chase clock, restarted on respawn (arcade behaviour)
+        self.steps_without_pellet = 0
         self.illegal_moves = 0
 
         self.walls: Set[Tuple[int, int]] = set(WALL_CELLS)
@@ -69,6 +70,7 @@ class Environment:
         """Reset Pac-Man and ghosts to their start tiles after a life is lost (pellets persist)."""
         self._place_actors()
         self.mode_step = 0
+        self.steps_without_pellet = 0
 
     @property
     def in_scatter(self) -> bool:
@@ -121,6 +123,7 @@ class Environment:
         if (nx, ny) in self.pellets:
             self.pellets.remove((nx, ny))
             ate_pellet = True
+        self.steps_without_pellet = 0 if ate_pellet else self.steps_without_pellet + 1
 
         if not self.pellets:
             return False, ate_pellet, True
@@ -164,6 +167,10 @@ class Environment:
                     else:
                         tx, ty = 1, GRID_HEIGHT - 2
 
+            # Horizontal tunnel coordinates are cyclic, including predictive targets
+            # that extend beyond either edge of the board.
+            tx %= GRID_WIDTH
+
             # Dispersion: prevent ghosts from overlapping on identical tiles
             claimed = {tuple(p) for p in new_ghosts}
 
@@ -171,7 +178,9 @@ class Environment:
                 _dx, _dy = DIRECTIONS[m]
                 _nx = (gpos[0] + _dx) % GRID_WIDTH
                 _ny = gpos[1] + _dy
-                score = abs(_nx - tx) + abs(_ny - ty)
+                dx = abs(_nx - tx)
+                dx = min(dx, GRID_WIDTH - dx)
+                score = dx + abs(_ny - ty)
                 if (_nx, _ny) in claimed:
                     score += 500.0  # heavy penalty to diverge paths
                 return score

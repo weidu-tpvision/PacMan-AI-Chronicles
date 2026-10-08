@@ -19,6 +19,7 @@ from typing import Optional
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 from agents.registry import build_controllers
+from agents.dqn_agent import DQNAgent
 from core.environment import SCORE_DEATH, SCORE_PELLET, SCORE_WIN, Environment
 from core.maze_data import WALL_CELLS
 from llm.decision_client import SystemOneAgent
@@ -62,13 +63,18 @@ class GameSession:
     def step(self):
         self.last_event = None
         legal = self.env.get_legal_moves(*self.env.pacman_pos)
-        res = self.current_agent.decide(
-            tuple(self.env.pacman_pos),
-            [tuple(g) for g in self.env.ghost_positions],
-            self.env.pellets,
-            legal,
-            self.env.last_move,
+        agent = self.current_agent
+        args = (
+            tuple(self.env.pacman_pos), [tuple(g) for g in self.env.ghost_positions],
+            self.env.pellets, legal, self.env.last_move,
         )
+        if isinstance(agent, DQNAgent):
+            res = agent.decide(
+                *args, mode_step=self.env.mode_step, ghost_dirs=self.env.ghost_dirs,
+                steps_without_pellet=self.env.steps_without_pellet,
+            )
+        else:
+            res = agent.decide(*args)
 
         col, ate, won = self.env.step(res.choice)
         self.moves += 1

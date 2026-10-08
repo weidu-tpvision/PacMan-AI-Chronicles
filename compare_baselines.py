@@ -56,7 +56,15 @@ def run_episode(agent, seed: int, max_moves: int = DEFAULT_MAX_STEPS) -> Dict:
 
         safe_moves = [m for m in legal if min_ghost_bfs(next_cell(pac, m), ghosts) > 1]
 
-        res = agent.decide(pac, ghosts, env.pellets, legal, env.last_move)
+        if isinstance(agent, DQNAgent):
+            res = agent.decide(
+                pac, ghosts, env.pellets, legal, env.last_move,
+                mode_step=env.mode_step, ghost_dirs=env.ghost_dirs,
+                steps_without_pellet=env.steps_without_pellet,
+                steps_remaining=max_moves - moves_count, horizon=max_moves,
+            )
+        else:
+            res = agent.decide(pac, ghosts, env.pellets, legal, env.last_move)
         latencies.append(res.latency_ms)
         simulated = simulated or res.latency_simulated
         if res.error_msg:

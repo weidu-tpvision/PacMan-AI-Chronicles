@@ -1,12 +1,8 @@
 """
 Deep Q-Network (DQN) PyTorch Architecture for Pac-Man.
-Encodes the 21x19 maze into an unentangled 6-channel spatial tensor with temporal velocity tracking:
-  Channel 0: Static Walls (1.0 = Wall, 0.0 = Corridor)
-  Channel 1: Pellets remaining (1.0 = Pellet, 0.0 = Empty)
-  Channel 2: Pac-Man current position at t (1.0 = Pac-Man)
-  Channel 3: Ghosts current positions at t (1.0 = Ghost)
-  Channel 4: Pac-Man previous position at t-1 (1.0 = Pac-Man)
-  Channel 5: Ghosts previous positions at t-1 (1.0 = Ghost)
+Encodes the maze using object-identity, motion, and environment-phase channels. Global
+features are repeated spatial planes so they can be consumed by the same convolutional
+network as the object maps.
 """
 
 from typing import List, Optional, Tuple
@@ -20,13 +16,20 @@ except ImportError:
     TORCH_AVAILABLE = False
     nn = object
 
+from core.environment import MODE_CYCLE, SCATTER_STEPS
 from core.maze_data import GRID_HEIGHT, GRID_WIDTH, WALL_CELLS
 
 ACTIONS = ["up", "down", "left", "right"]
 ACTION_TO_IDX = {a: i for i, a in enumerate(ACTIONS)}
 IDX_TO_ACTION = {i: a for i, a in enumerate(ACTIONS)}
 
-NUM_CHANNELS = 6
+GHOST_SLOTS = 3
+BASE_CHANNELS = 4  # walls, pellets, Pac-Man now, Pac-Man previously
+GHOST_POSITION_CHANNELS = 2 * GHOST_SLOTS
+PACMAN_HEADING_CHANNELS = 4
+GHOST_HEADING_CHANNELS = 4 * GHOST_SLOTS
+SCALAR_CHANNELS = 4  # scatter flag, cycle phase, stall progress, horizon remaining
+NUM_CHANNELS = BASE_CHANNELS + GHOST_POSITION_CHANNELS + PACMAN_HEADING_CHANNELS + GHOST_HEADING_CHANNELS + SCALAR_CHANNELS
 FRAME_STACK_SIZE = NUM_CHANNELS  # Backwards-compatibility alias
 
 # Precompute static walls mask (Channel 0)
@@ -42,19 +45,18 @@ def encode_state(
     pellets: set,
     prev_pacman_pos: Optional[Tuple[int, int]] = None,
     prev_ghost_positions: Optional[List[Tuple[int, int]]] = None,
-    **kwargs,
+    last_move: Optional[str] = None,
+    ghost_dirs: Optional[List[str]] = None,
+    mode_step: int = 0,
+    steps_without_pellet: int = 0,
+    steps_remaining: int = 300,
+    horizon: int = 300,
 ) -> np.ndarray:
     """
-    Encode game state into an unentangled (6, 21, 19) float32 binary tensor:
-      Channel 0: Static Walls (1.0 = Wall, 0.0 = Corridor)
-      Channel 1: Pellets remaining (1.0 = Pellet, 0.0 = Empty)
-      Channel 2: Pac-Man current position at t (1.0 = Pac-Man)
-      Channel 3: Ghosts current positions at t (1.0 = Ghost)
-      Channel 4: Pac-Man previous position at t-1 (1.0 = Pac-Man)
-      Channel 5: Ghosts previous positions at t-1 (1.0 = Ghost)
-
-    All channels contain strictly discrete binary values {0.0, 1.0} ensuring
-    optimal gradient flow under ReLU without sign or polarity interference.
+    Encode a Markov-oriented observation. Channel groups are ordered as base maps,
+    per-ghost current/previous maps, Pac-Man heading, per-ghost headings, then global
+    scatter/phase/stall/horizon planes. Heading and scalar channels are binary or
+    normalized to [0, 1].
     """
     state = np.zeros((NUM_CHANNELS, GRID_HEIGHT, GRID_WIDTH), dtype=np.float32)
     state[0] = WALL_MAP
@@ -67,19 +69,42 @@ def encode_state(
     if 0 <= py < GRID_HEIGHT and 0 <= px < GRID_WIDTH:
         state[2, py, px] = 1.0
 
-    for gx, gy in ghost_positions:
+    ghost_current_start = BASE_CHANNELS
+    ghost_previous_start = ghost_current_start + GHOST_SLOTS
+    for index, (gx, gy) in enumerate(ghost_positions[:GHOST_SLOTS]):
         if 0 <= gy < GRID_HEIGHT and 0 <= gx < GRID_WIDTH:
-            state[3, gy, gx] = 1.0
+            state[ghost_current_start + index, gy, gx] = 1.0
 
     # Temporal positions for velocity / direction inference
     ppx, ppy = prev_pacman_pos if prev_pacman_pos is not None else pacman_pos
     if 0 <= ppy < GRID_HEIGHT and 0 <= ppx < GRID_WIDTH:
-        state[4, ppy, ppx] = 1.0
+        state[3, ppy, ppx] = 1.0
 
     prev_ghosts = prev_ghost_positions if prev_ghost_positions is not None else ghost_positions
-    for pgx, pgy in prev_ghosts:
+    for index, (pgx, pgy) in enumerate(prev_ghosts[:GHOST_SLOTS]):
         if 0 <= pgy < GRID_HEIGHT and 0 <= pgx < GRID_WIDTH:
-            state[5, pgy, pgx] = 1.0
+            state[ghost_previous_start + index, pgy, pgx] = 1.0
+
+    cursor = BASE_CHANNELS + GHOST_POSITION_CHANNELS
+    directions = ["up", "down", "left", "right"]
+    if last_move in directions:
+        state[cursor + directions.index(last_move), :, :] = 1.0
+    cursor += PACMAN_HEADING_CHANNELS
+
+    ghost_dirs = ghost_dirs or ["up"] * GHOST_SLOTS
+    for index, (gx, gy) in enumerate(ghost_positions[:GHOST_SLOTS]):
+        if index < len(ghost_dirs) and ghost_dirs[index] in directions and 0 <= gy < GRID_HEIGHT and 0 <= gx < GRID_WIDTH:
+            direction_channel = cursor + index * 4 + directions.index(ghost_dirs[index])
+            state[direction_channel, gy, gx] = 1.0
+    cursor += GHOST_HEADING_CHANNELS
+
+    # The current decision's ghost move occurs after mode_step increments.
+    next_mode_step = mode_step + 1
+    mode_in_cycle = (next_mode_step - 1) % MODE_CYCLE
+    state[cursor, :, :] = float(mode_in_cycle < SCATTER_STEPS)
+    state[cursor + 1, :, :] = mode_in_cycle / max(1, MODE_CYCLE - 1)
+    state[cursor + 2, :, :] = min(max(steps_without_pellet, 0), 45) / 45.0
+    state[cursor + 3, :, :] = min(max(steps_remaining, 0), max(1, horizon)) / max(1, horizon)
 
     return state
 
@@ -96,7 +121,7 @@ def encode_frame(
 if TORCH_AVAILABLE:
     class PacmanDQN(nn.Module):
         """
-        Deep Q-Network with temporal velocity tracking across 6 unentangled channels.
+        Deep Q-Network with identity-preserving spatial and state-context channels.
         Uses MaxPool2d(2) to provide a 10x10 receptive field for global maze vision.
         """
 

@@ -1,7 +1,7 @@
 """
 Training pipeline for Deep Q-Network (DQN) and Double-DQN on Pac-Man.
 Implements:
-- Unentangled 6-channel state encoding with velocity/momentum tracking
+- Identity-preserving state encoding with motion, mode, stall, and horizon features
 - Global 10x10 receptive field via MaxPool2d(2)
 - Experience Replay Buffer (breaks temporal correlation)
 - Target Network (Double DQN to prevent Q-value overestimation)
@@ -162,14 +162,22 @@ def evaluate_dqn(policy_net: nn.Module, episodes: int = 15, max_steps: int = DEF
         score = pellets_count = 0
         prev_p = prev_g = None
 
-        for _ in range(max_steps):
+        steps_without_pellet = 0
+        for step_index in range(max_steps):
             legal = env.get_legal_moves(*env.pacman_pos)
             curr_p = tuple(env.pacman_pos)
             curr_g = [tuple(g) for g in env.ghost_positions]
-            move = greedy_action(policy_net, encode_state(curr_p, curr_g, env.pellets, prev_p, prev_g), legal)
+            state = encode_state(
+                curr_p, curr_g, env.pellets, prev_p, prev_g, last_move=env.last_move,
+                ghost_dirs=env.ghost_dirs, mode_step=env.mode_step,
+                steps_without_pellet=steps_without_pellet,
+                steps_remaining=max_steps - step_index, horizon=max_steps,
+            )
+            move = greedy_action(policy_net, state, legal)
             prev_p, prev_g = curr_p, curr_g
 
             collided, ate_pellet, won = env.step(move)
+            steps_without_pellet = 0 if ate_pellet else steps_without_pellet + 1
             if ate_pellet:
                 score += SCORE_PELLET
                 pellets_count += 1
@@ -240,7 +248,7 @@ def train_dqn(
             log_file.flush()
 
         log_print("======================================================================")
-        log_print(" DEEP Q-NETWORK (DQN) TRAINING: 6-Channel Velocity-Aware CNN")
+        log_print(f" DEEP Q-NETWORK (DQN) TRAINING: {NUM_CHANNELS}-Channel State Encoder")
         log_print("======================================================================")
         log_print(f"Device: {device} | Batch Size: {batch_size} | Learning Rate: {lr} | Seed: {seed}")
         log_print(f"Episodes: {episodes} | Horizon: {max_steps} | Target Sync: every {target_update_steps} steps")
@@ -255,7 +263,12 @@ def train_dqn(
             legal = env.get_legal_moves(*env.pacman_pos)
             curr_p = tuple(env.pacman_pos)
             curr_g = [tuple(g) for g in env.ghost_positions]
-            s = encode_state(curr_p, curr_g, env.pellets, prev_p, prev_g)
+            s = encode_state(
+                curr_p, curr_g, env.pellets, prev_p, prev_g, last_move=env.last_move,
+                ghost_dirs=env.ghost_dirs, mode_step=env.mode_step,
+                steps_without_pellet=env.steps_without_pellet,
+                steps_remaining=max(0, max_steps - env.step_count), horizon=max_steps,
+            )
 
             m = rng.choice(legal)
             prev_move = env.last_move
@@ -263,15 +276,20 @@ def train_dqn(
             no_pellet = 0 if ate else no_pellet + 1
             r, stalled = compute_reward(prev_move, m, ate, col, won, len(legal), no_pellet)
 
-            ns = encode_state(tuple(env.pacman_pos), [tuple(g) for g in env.ghost_positions], env.pellets, curr_p, curr_g)
+            ns = encode_state(
+                tuple(env.pacman_pos), [tuple(g) for g in env.ghost_positions], env.pellets, curr_p, curr_g,
+                last_move=env.last_move, ghost_dirs=env.ghost_dirs, mode_step=env.mode_step,
+                steps_without_pellet=env.steps_without_pellet,
+                steps_remaining=max(0, max_steps - env.step_count), horizon=max_steps,
+            )
             next_legal = env.get_legal_moves(*env.pacman_pos)
             next_mask = np.array([a in next_legal for a in ACTION_TO_IDX], dtype=np.bool_)
             if not next_mask.any():
                 next_mask[:] = True
-            replay_buffer.push(s, ACTION_TO_IDX[m], r, ns, float(col or won), next_mask)
+            replay_buffer.push(s, ACTION_TO_IDX[m], r, ns, float(col or won or stalled or env.step_count >= max_steps), next_mask)
             prev_p, prev_g = curr_p, curr_g
 
-            if col or won or stalled:
+            if col or won or stalled or env.step_count >= max_steps:
                 env = Environment(seed=train_seed(rng))
                 prev_p = prev_g = None
                 no_pellet = 0
@@ -298,7 +316,12 @@ def train_dqn(
                 legal = env.get_legal_moves(*env.pacman_pos)
                 curr_p = tuple(env.pacman_pos)
                 curr_g = [tuple(g) for g in env.ghost_positions]
-                s = encode_state(curr_p, curr_g, env.pellets, prev_p, prev_g)
+                s = encode_state(
+                    curr_p, curr_g, env.pellets, prev_p, prev_g, last_move=env.last_move,
+                    ghost_dirs=env.ghost_dirs, mode_step=env.mode_step,
+                    steps_without_pellet=steps_without_pellet,
+                    steps_remaining=max_steps - steps + 1, horizon=max_steps,
+                )
 
                 # Epsilon-greedy action selection over the raw network
                 if rng.random() < epsilon:
@@ -319,9 +342,12 @@ def train_dqn(
                 ep_reward += r
 
                 ns = encode_state(
-                    tuple(env.pacman_pos), [tuple(g) for g in env.ghost_positions], env.pellets, curr_p, curr_g
+                    tuple(env.pacman_pos), [tuple(g) for g in env.ghost_positions], env.pellets, curr_p, curr_g,
+                    last_move=env.last_move, ghost_dirs=env.ghost_dirs, mode_step=env.mode_step,
+                    steps_without_pellet=steps_without_pellet,
+                    steps_remaining=max_steps - steps, horizon=max_steps,
                 )
-                terminal = col or won  # stalls / horizon are truncations, not terminals
+                terminal = col or won or stalled or steps >= max_steps
                 next_legal = env.get_legal_moves(*env.pacman_pos)
                 next_mask = np.array([a in next_legal for a in ACTION_TO_IDX], dtype=np.bool_)
                 if not next_mask.any():
