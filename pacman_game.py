@@ -185,9 +185,10 @@ class PacmanGame:
             pellets_copy = set(self.pellets)
             legal_copy = list(legal_moves)
             last_move = self.last_move
-            mode_step = self.env.mode_step
-            ghost_dirs = list(self.env.ghost_dirs)
-            steps_without_pellet = self.env.steps_without_pellet
+            env = getattr(self, "env", None)
+            mode_step = getattr(env, "mode_step", 0)
+            ghost_dirs = list(getattr(env, "ghost_dirs", ["up"] * len(ghost_pos)))
+            steps_without_pellet = getattr(env, "steps_without_pellet", 0)
             active_agent = self.current_controller["agent"]
 
         def worker():
