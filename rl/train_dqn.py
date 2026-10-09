@@ -6,7 +6,8 @@ Implements:
 - Prioritized Experience Replay with importance-sampling correction
 - Target Network (Double DQN to prevent Q-value overestimation), legal-action masks
 - Smooth L1 (Huber) Loss and Adam optimization
-- Decaying epsilon-greedy exploration
+- Epsilon-greedy exploration decayed over a fraction of the planned episodes
+- Final re-evaluation of the best and final weights on VAL seeds not used for selection
 - Reward = tournament score delta x REWARD_SCALE, plus small reversal and per-step
   stall penalties; stalls are penalized, not truncated (same episodes as evaluation)
 - Fully seeded runs with disjoint TRAIN / VAL seed ranges (core.seeds)
@@ -49,7 +50,7 @@ from rl.dqn_model import ACTION_TO_IDX, NUM_CHANNELS, NUM_SCALARS, STALL_STEPS, 
 DEFAULT_WEIGHTS_DIR = os.path.join(os.path.dirname(__file__), "weights")
 DEFAULT_MODEL_PATH = os.path.join(DEFAULT_WEIGHTS_DIR, "dqn_pacman.pt")
 TRAINING_STATE_NAME = "dqn_training_state.pt"
-TRAINING_STATE_VERSION = 3  # v3: (grid, scalars) observations, history-free encoding
+TRAINING_STATE_VERSION = 4  # v4: run-length-relative epsilon schedule
 
 # Reward: the evaluation score (SCORE_* in core.environment) scaled to a small range,
 # so the agent optimizes exactly what the tournament measures, plus two small shaping
@@ -257,12 +258,28 @@ def default_training_state_path(save_path: str = DEFAULT_MODEL_PATH) -> str:
     return os.path.join(os.path.dirname(os.path.abspath(save_path)), TRAINING_STATE_NAME)
 
 
+def epsilon_schedule(episodes_done: int, episodes: int, start: float, minimum: float, decay_fraction: float) -> float:
+    """Exploration rate for the next episode: exponential decay from `start` that reaches
+    `minimum` after `decay_fraction` of the planned episodes, so short and long runs get
+    the same exploration profile. A pure function of the episode count (resume-exact)."""
+    decay_episodes = max(1.0, decay_fraction * episodes)
+    progress = min(1.0, episodes_done / decay_episodes)
+    return max(minimum, start * (minimum / start) ** progress)
+
+
 def evaluate_dqn(policy_net: nn.Module, episodes: int = 15, max_steps: int = DEFAULT_MAX_STEPS) -> Tuple[float, float]:
-    """Evaluate the pure greedy policy (no inference heuristics) on VAL seeds."""
+    """Mean score and pellets of the pure greedy policy (no inference heuristics) on the
+    first `episodes` VAL seeds (the checkpoint-selection seeds)."""
+    scores, pellets = evaluate_dqn_episodes(policy_net, val_seeds(episodes), max_steps)
+    return statistics.mean(scores), statistics.mean(pellets)
+
+
+def evaluate_dqn_episodes(policy_net: nn.Module, seeds, max_steps: int = DEFAULT_MAX_STEPS) -> Tuple[list, list]:
+    """Per-episode scores and pellets of the pure greedy policy on `seeds`."""
     policy_net.eval()
     scores, pellets_cleared = [], []
 
-    for seed in val_seeds(episodes):
+    for seed in seeds:
         seed_everything(seed)
         env = Environment(seed=seed)
         score = pellets_count = 0
@@ -289,7 +306,16 @@ def evaluate_dqn(policy_net: nn.Module, episodes: int = 15, max_steps: int = DEF
         pellets_cleared.append(pellets_count)
 
     policy_net.train()
-    return statistics.mean(scores), statistics.mean(pellets_cleared)
+    return scores, pellets_cleared
+
+
+def _summarize(scores: list, pellets: list) -> dict:
+    n = len(scores)
+    ci95 = 1.96 * statistics.stdev(scores) / n ** 0.5 if n > 1 else 0.0
+    return {
+        "mean_score": round(statistics.mean(scores), 2), "score_ci95": round(ci95, 2),
+        "mean_pellets": round(statistics.mean(pellets), 2),
+    }
 
 
 def train_dqn(
@@ -299,7 +325,7 @@ def train_dqn(
     gamma: float = 0.99,
     epsilon_start: float = 1.0,
     epsilon_min: float = 0.05,
-    epsilon_decay: float = 0.9975,
+    epsilon_decay_fraction: float = 0.6,
     per_beta_start: float = 0.4,
     target_update_steps: int = 400,
     warmup_steps: int = 1000,
@@ -314,6 +340,7 @@ def train_dqn(
     checkpoint_path: Optional[str] = None,
     resume: bool = False,
     stop_after: Optional[int] = None,
+    final_val_episodes: int = 200,
 ):
     """Train (or resume training) the DQN.
 
@@ -321,7 +348,14 @@ def train_dqn(
     rl/weights/dqn_training_state.pt) is written every `checkpoint_every` episodes, after
     `stop_after` episodes of this session, and on Ctrl+C. With `resume=True` the run
     continues from it using the *checkpointed* hyperparameters (the arguments above are
-    ignored except `checkpoint_path`, `stop_after`, `checkpoint_every` and `make_plots`).
+    ignored except `checkpoint_path`, `stop_after`, `checkpoint_every`, `make_plots` and
+    `final_val_episodes`).
+
+    Exploration decays from `epsilon_start` to `epsilon_min` over `epsilon_decay_fraction`
+    of `episodes`. When the run completes, the best checkpoint and the final weights are
+    re-evaluated on `final_val_episodes` VAL seeds that were *not* used for checkpoint
+    selection (selection picks the best of many noisy validations, so its own score is
+    optimistic); results go to the log, the return value and dqn_final_eval.json.
     Resuming from a periodic or --stop-after checkpoint reproduces the uninterrupted
     run exactly; a Ctrl+C checkpoint also keeps the interrupted episode's partial
     experience and updates. The state file is deleted once the run completes.
@@ -340,14 +374,14 @@ def train_dqn(
             raise ValueError(f"Unsupported training state version {ckpt.get('version')!r} in {checkpoint_path}")
         cfg = ckpt["config"]
         episodes, lr, batch_size, gamma = cfg["episodes"], cfg["lr"], cfg["batch_size"], cfg["gamma"]
-        epsilon_start, epsilon_min, epsilon_decay = cfg["epsilon_start"], cfg["epsilon_min"], cfg["epsilon_decay"]
+        epsilon_start, epsilon_min, epsilon_decay_fraction = cfg["epsilon_start"], cfg["epsilon_min"], cfg["epsilon_decay_fraction"]
         per_beta_start, target_update_steps = cfg["per_beta_start"], cfg["target_update_steps"]
         warmup_steps, max_steps, val_every, val_episodes = cfg["warmup_steps"], cfg["max_steps"], cfg["val_every"], cfg["val_episodes"]
         seed, save_path, buffer_capacity = cfg["seed"], cfg["save_path"], cfg["buffer_capacity"]
 
     config = {
         "episodes": episodes, "lr": lr, "batch_size": batch_size, "gamma": gamma,
-        "epsilon_start": epsilon_start, "epsilon_min": epsilon_min, "epsilon_decay": epsilon_decay,
+        "epsilon_start": epsilon_start, "epsilon_min": epsilon_min, "epsilon_decay_fraction": epsilon_decay_fraction,
         "per_beta_start": per_beta_start, "target_update_steps": target_update_steps,
         "warmup_steps": warmup_steps, "max_steps": max_steps, "val_every": val_every,
         "val_episodes": val_episodes, "seed": seed, "save_path": save_path, "buffer_capacity": buffer_capacity,
@@ -361,6 +395,7 @@ def train_dqn(
     log_path = os.path.join(weights_dir, "dqn_training.log")
     json_path = os.path.join(weights_dir, "dqn_training_metrics.json")
     csv_path = os.path.join(weights_dir, "dqn_training_metrics.csv")
+    final_eval_path = os.path.join(weights_dir, "dqn_final_eval.json")
 
     device = torch.device("cpu")
     policy_net = PacmanDQN().to(device)
@@ -473,6 +508,7 @@ def train_dqn(
         try:
             for ep in range(start_episode, session_end):
                 env = Environment(seed=train_seed(rng))
+                epsilon = epsilon_schedule(ep, episodes, epsilon_start, epsilon_min, epsilon_decay_fraction)
                 # IS exponent annealed over the episode schedule (episodes rarely run to
                 # the horizon, so a step-based schedule would never reach beta = 1).
                 beta = min(1.0, per_beta_start + (1.0 - per_beta_start) * ep / max(1, episodes - 1))
@@ -544,8 +580,6 @@ def train_dqn(
                     if terminal:
                         break
 
-                # Decay exploration
-                epsilon = max(epsilon_min, epsilon * epsilon_decay)
                 lr_scheduler.step()
                 current_lr = optimizer.param_groups[0]["lr"]
 
@@ -611,10 +645,31 @@ def train_dqn(
             return {"completed": False, "episodes_done": len(metrics_history), "best_val_score": best_val_score,
                     "best_val_episode": best_val_episode, "metrics": metrics_history}
 
+        final_eval = None
+        if final_val_episodes > 0:
+            # Unbiased re-check: seeds right after the selection seeds, never used to pick a checkpoint.
+            seeds = val_seeds(final_val_episodes, offset=val_episodes)
+            log_print(f"\nFinal re-evaluation on {len(seeds)} unseen VAL seeds ({seeds[0]}..{seeds[-1]})...")
+            best_net = PacmanDQN().to(device)
+            best_net.load_state_dict(torch.load(save_path, map_location=device, weights_only=True))
+            final_eval = {
+                "seeds": [seeds[0], seeds[-1]],
+                "selection_seeds": [val_seeds(val_episodes)[0], val_seeds(val_episodes)[-1]],
+                "best_checkpoint": {"episode": best_val_episode, "selection_score": best_val_score,
+                                    **_summarize(*evaluate_dqn_episodes(best_net, seeds, max_steps))},
+                "final_weights": {"episode": episodes, **_summarize(*evaluate_dqn_episodes(policy_net, seeds, max_steps))},
+            }
+            with open(final_eval_path, "w", encoding="utf-8", newline="\n") as f:
+                json.dump(final_eval, f, indent=2)
+            for label, key in (("Best checkpoint", "best_checkpoint"), ("Final weights  ", "final_weights")):
+                r = final_eval[key]
+                log_print(f"  {label} (ep {r['episode']}): {r['mean_score']:7.1f} +/- {r['score_ci95']:5.1f} "
+                          f"(pellets {r['mean_pellets']:5.1f})")
+
         log_print("\n======================================================================")
         # Relative path: the log is a committed artifact and must not embed local directories
         log_print(f" TRAINING COMPLETE! Best Checkpoint Saved to {os.path.relpath(save_path)}")
-        log_print(f" Best Validation Score: {best_val_score:.1f} (episode {best_val_episode})")
+        log_print(f" Best Validation Score: {best_val_score:.1f} (episode {best_val_episode}; selection score, optimistic)")
         log_print("======================================================================")
 
     export_metrics()
@@ -627,7 +682,7 @@ def train_dqn(
         plot_metrics(json_path, weights_dir)
 
     return {"completed": True, "episodes_done": episodes, "best_val_score": best_val_score,
-            "best_val_episode": best_val_episode, "metrics": metrics_history}
+            "best_val_episode": best_val_episode, "metrics": metrics_history, "final_eval": final_eval}
 
 
 if __name__ == "__main__":
@@ -647,6 +702,8 @@ if __name__ == "__main__":
     parser.add_argument("--stop-after", type=int, default=None,
                         help="Run at most N episodes in this session, save training state, then exit")
     parser.add_argument("--no-plots", action="store_true", help="Skip figure generation at the end")
+    parser.add_argument("--final-val-episodes", type=int, default=200,
+                        help="Unseen VAL seeds for the final re-evaluation of best/final weights (0 = skip)")
     args = parser.parse_args()
 
     hyper = {"episodes": args.episodes, "lr": args.lr, "batch_size": args.batch_size,
@@ -655,7 +712,8 @@ if __name__ == "__main__":
     if args.resume and passed:
         parser.error(f"--resume uses the checkpoint's hyperparameters; drop {', '.join('--' + k.replace('_', '-') for k in passed)}")
 
-    common = dict(checkpoint_every=args.checkpoint_every, stop_after=args.stop_after, make_plots=not args.no_plots)
+    common = dict(checkpoint_every=args.checkpoint_every, stop_after=args.stop_after, make_plots=not args.no_plots,
+                  final_val_episodes=args.final_val_episodes)
     if args.resume:
         train_dqn(resume=True, checkpoint_path=args.checkpoint_path
                   or default_training_state_path(), **common)

@@ -22,8 +22,14 @@ def train_seed(rng: random.Random) -> int:
     return rng.randint(TRAIN_SEED_MIN, TRAIN_SEED_MAX)
 
 
-def val_seeds(n: int):
-    return [VAL_SEED_BASE + i for i in range(n)]
+VAL_SEED_COUNT = 1_000
+
+
+def val_seeds(n: int, offset: int = 0):
+    """`n` VAL seeds starting `offset` seeds into the VAL range (disjoint slices for disjoint offsets)."""
+    if offset < 0 or offset + n > VAL_SEED_COUNT:
+        raise ValueError(f"VAL seed slice [{offset}, {offset + n}) exceeds the {VAL_SEED_COUNT}-seed VAL range")
+    return [VAL_SEED_BASE + offset + i for i in range(n)]
 
 
 def test_seeds(n: int):

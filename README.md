@@ -18,7 +18,7 @@ What happens when you pit modern **Generative AI (Large Language Models)** again
 > ### 🚧 Work in Progress & DQN Continuation Notice
 > This project is under active research and development. In particular, the **Deep Q-Network (DQN)** subsystem is **actively being continued**.
 >
-> The feature-optimized RL agents rely on human-engineered topological features (graph BFS, junction detection, dead-end depth). In contrast, **DQN learns its entire representation and policy end-to-end directly from raw spatial grid tensors without human inductive bias**. Because it is unconstrained by human feature ceilings, an extended DQN policy has the highest theoretical ceiling in the arena. See the [DQN Research Roadmap](#-ongoing-research--dqn-roadmap) below.
+> The feature-optimized RL agents score moves with human-engineered topological features (graph BFS, junction detection, dead-end depth). The **DQN instead learns its own spatial features** from symbolic grid maps — but it is not free of human design: the observation channels, the reward shaping and the optional inference heuristics are all hand-chosen. Whether that learned representation can overtake the engineered features is the open question this subsystem explores. See the [DQN Research Roadmap](#-ongoing-research--dqn-roadmap) below.
 >
 > **Checkpoint status:** no full DQN training run has been performed since the latest DQN and environment changes (including the collision-rule fix). The shipped `rl/weights/dqn_pacman.pt` predates them, so any DQN figures in the generated artifacts are provisional. Experiment results and run parameters are deliberately kept out of the docs while the project is a work in progress.
 
@@ -70,19 +70,19 @@ The report includes, per agent: mean score ±95% CI, mean moves/pellets, surviva
 ### What to look for in the numbers:
 1. **The Latency Divide:** learned/heuristic policies decide in microseconds-to-sub-millisecond on CPU, while a live LLM pays a network/model round-trip on every move. Measure it with `benchmark.py` against your own model before drawing conclusions for real-time use.
 2. **Feature Engineering vs. Search:** CEM policy search over graph features (dead-end traps, safe junctions, BFS distances), the textbook TD agent and the hand-tuned Greedy heuristic all encode human domain knowledge in different ways — compare their mean scores and CIs rather than assuming the optimized policy wins.
-3. **End-to-End Visual Learning:** the DQN learns corridor navigation from raw spatial tensors with zero feature engineering; watch whether extended training closes the gap to the feature-based agents (see roadmap below).
+3. **Learned vs. Engineered Features:** the DQN learns corridor and threat features from symbolic grid maps instead of hand-written BFS/trap features (its observation and reward are still designed by hand); watch whether full training closes the gap to the feature-based agents, and compare "DQN (raw network)" against "DQN (+inference heuristics)" to see how much the hand-written inference rules contribute.
 
 ---
 
 ## 🔬 Ongoing Research & DQN Roadmap
 
-### Why DQN Has the Highest Theoretical Ceiling
-In classical reinforcement learning, policy search methods (such as the Cross-Entropy Method) can quickly converge to high scores when supplied with **human-engineered features** (`dead_end_trap`, `safe_junction`, BFS distance maps). However, this introduces a hard limitation: **the policy's intelligence is strictly bounded by human domain knowledge and representation bias**.
+### Why Study the DQN
+Policy search (such as the Cross-Entropy Method) can converge quickly when supplied with **human-engineered features** (`dead_end_trap`, `safe_junction`, BFS distance maps), but a linear policy over those features can never be better than the features themselves allow.
 
-**The Deep Q-Network (DQN) operates on a fundamentally purer principle:**
-- **Spatial State Learning:** It receives symbolic maze maps with separate actor identities, motion, and environment-state features.
-- **Autonomous Representation Learning:** The convolutional filters learn their own spatial kernels for corridor recognition, proximity gradients, and escape pathways directly from Bellman temporal difference errors.
-- **Unbounded Potential:** Because its representation capacity is vast and unconstrained by linear assumptions, extended training is expected to surpass handcrafted heuristics. Current progress is tracked in the training artifacts (`rl/weights/dqn_training_metrics.json`, `dqn_training_figures.svg`), not in this README.
+**The DQN trades that ceiling for a harder learning problem:**
+- **Designed inputs, learned features:** it receives symbolic maze maps (walls, pellets, per-actor positions and headings, Scatter/Chase phase) and learns its own convolutional features for corridors, threats and escape routes from temporal-difference errors.
+- **Human choices remain:** the observation layout, the score-aligned reward with small shaping terms, the discount and the optional inference heuristics are design decisions (documented with their rationale in `dqn.md`).
+- **More capacity, no guarantee:** a nonlinear value function *can* represent strategies a linear policy cannot, but whether it does depends on training — it is an empirical question, measured on identical seeds against the other agents. Progress lives in the training artifacts (`rl/weights/dqn_training_metrics.json`, `dqn_final_eval.json`, `dqn_training_figures.svg`), not in this README.
 
 ### Phase 2 DQN Roadmap
 - [x] **Markov-Oriented State Encoding**: history-free `(grid, scalars)` observation — per-ghost maps, local Pac-Man and ghost headings, Scatter/Chase phase planes, stall and horizon scalars (see `dqn.md`).
@@ -93,7 +93,9 @@ In classical reinforcement learning, policy search methods (such as the Cross-En
 - [x] **Automated Training Diagnostics**: Per-episode metrics logging (JSON/CSV) and 4-panel visual figure generation (vector SVG and raster PNG).
 - [x] **Prioritized Experience Replay (PER)**: Replay transitions by TD-error priority with annealed importance-sampling correction.
 - [x] **Dueling DQN Architecture**: Separate state value $V(s)$ and action advantages $A(s, a)$.
-- [ ] **Extended Training Run**: Longer runs with cosine learning-rate scheduling; compare best-checkpoint validation means against the feature-based agents on identical seeds before updating the shipped checkpoint.
+- [x] **Run-Length-Relative Exploration**: epsilon decays to its floor over a fixed fraction of the planned episodes, so short and long runs explore alike.
+- [x] **Unbiased Final Evaluation**: after training, the best checkpoint and the final weights are re-evaluated on VAL seeds not used for checkpoint selection (`rl/weights/dqn_final_eval.json`).
+- [ ] **Extended Training Run**: full-length run on the current design; compare the final-evaluation means against the feature-based agents on identical seeds before updating the shipped checkpoint.
 - [x] **Training Resume Support**: full training-state checkpoints (periodic, `--stop-after`, Ctrl+C) and exact `--resume` (see Quickstart).
 
 ### Open Issues
@@ -200,6 +202,7 @@ PacMan-AI-Chronicles/
 │       ├── dqn_training.log     # Detailed milestone training telemetry log
 │       ├── dqn_training_metrics.json # Per-episode training metrics (JSON)
 │       ├── dqn_training_metrics.csv  # Per-episode training metrics (CSV)
+│       ├── dqn_final_eval.json  # Best/final weights re-evaluated on unseen VAL seeds
 │       ├── dqn_training_figures.svg  # Scalable vector diagnostic dashboard
 │       ├── dqn_training_figures.png  # 4-panel raster diagnostic dashboard
 │       ├── learned_q_weights.json    # Classical TD weights

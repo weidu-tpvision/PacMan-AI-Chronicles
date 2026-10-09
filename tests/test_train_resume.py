@@ -17,7 +17,7 @@ if TORCH_AVAILABLE:
 # Tiny but complete run: warm-up, PER updates, target syncs, validation and best-model saves.
 TINY = dict(
     episodes=4, max_steps=15, warmup_steps=40, batch_size=8, val_every=2, val_episodes=1,
-    buffer_capacity=200, target_update_steps=10, make_plots=False,
+    buffer_capacity=200, target_update_steps=10, make_plots=False, final_val_episodes=2,
 )
 
 
@@ -46,12 +46,13 @@ class TestTrainResume(unittest.TestCase):
         self.assertEqual(first["episodes_done"], 2)
         self.assertTrue(os.path.exists(state_b))
 
-        resumed = train_dqn(resume=True, checkpoint_path=state_b, make_plots=False)
+        resumed = train_dqn(resume=True, checkpoint_path=state_b, make_plots=False, final_val_episodes=2)
         self.assertTrue(resumed["completed"])
         self.assertFalse(os.path.exists(state_b), "training state must be removed after completion")
 
         self.assertEqual(resumed["metrics"], full["metrics"])
         self.assertEqual(resumed["best_val_episode"], full["best_val_episode"])
+        self.assertEqual(resumed["final_eval"], full["final_eval"])
         best_a = torch.load(model_a, weights_only=True)
         best_b = torch.load(model_b, weights_only=True)
         for key in best_a:
@@ -76,9 +77,33 @@ class TestTrainResume(unittest.TestCase):
         saved = torch.load(state, weights_only=True)  # must stay weights_only-loadable
         self.assertEqual(saved["progress"]["episodes_done"], interrupted["episodes_done"])
 
-        resumed = train_dqn(resume=True, checkpoint_path=state, make_plots=False)
+        resumed = train_dqn(resume=True, checkpoint_path=state, make_plots=False, final_val_episodes=2)
         self.assertTrue(resumed["completed"])
         self.assertEqual([m["episode"] for m in resumed["metrics"]], list(range(1, TINY["episodes"] + 1)))
+
+    def test_final_evaluation_uses_unseen_val_seeds(self):
+        from core.seeds import val_seeds
+
+        run_dir, model, _ = self._run_dir("f")
+        result = train_dqn(save_path=model, **TINY)
+        final = result["final_eval"]
+        selection = set(val_seeds(TINY["val_episodes"]))
+        self.assertNotIn(final["seeds"][0], selection)
+        self.assertEqual(final["seeds"][1] - final["seeds"][0] + 1, TINY["final_val_episodes"])
+        self.assertEqual(final["best_checkpoint"]["episode"], result["best_val_episode"])
+        for key in ("best_checkpoint", "final_weights"):
+            self.assertIn("mean_score", final[key])
+        self.assertTrue(os.path.exists(os.path.join(run_dir, "dqn_final_eval.json")))
+
+    def test_epsilon_schedule_follows_run_length(self):
+        from rl.train_dqn import epsilon_schedule
+
+        for episodes in (200, 1200):
+            eps = [epsilon_schedule(ep, episodes, 1.0, 0.05, 0.6) for ep in range(episodes)]
+            self.assertEqual(eps[0], 1.0)
+            self.assertTrue(all(a >= b for a, b in zip(eps, eps[1:])), "must not increase")
+            self.assertAlmostEqual(eps[int(0.6 * episodes)], 0.05)
+            self.assertEqual(eps[-1], 0.05)
 
     def test_resume_without_state_fails_clearly(self):
         with self.assertRaises(FileNotFoundError):

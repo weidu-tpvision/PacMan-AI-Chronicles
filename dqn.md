@@ -81,6 +81,7 @@ The discount's effective horizon, `1 / (1 − γ)`, must cover the span over whi
 - **Dueling** value/advantage heads.
 - **Prioritized replay** (proportional, exponent `alpha`) with importance-sampling weights; the IS exponent β is annealed from `per_beta_start` to 1 over the *episode* schedule (annealing by environment steps assumed every episode ran to the horizon, so β never reached 1).
 - **Huber loss**, gradient-norm clipping, periodic hard target sync, Adam with cosine learning-rate annealing.
+- **Exploration:** epsilon-greedy, decaying exponentially from `epsilon_start` to `epsilon_min` over `epsilon_decay_fraction` of the planned episodes. A fixed per-episode decay factor would tie the exploration profile to one run length (short runs would end mostly random, long runs would sit at the floor), and the schedule is a pure function of the episode count, so resuming stays exact.
 - **Replay storage:** preallocated ring arrays (fp16 grids, fp32 scalars); full training-state checkpoints for `--resume` (see README).
 
 ## 5. Comparison with the Atari DQN
@@ -99,7 +100,7 @@ The simulator exposes exact state, so imitating the pixel pipeline would only ad
 ## 6. Experiment protocol
 - Change **one thing per run** and compare on identical VAL seeds and training budgets.
 - Train long runs in sessions with `--stop-after` / `--resume` (resuming from a periodic or `--stop-after` checkpoint is exact).
-- Picking the best of many periodic validations on a small VAL set is optimistic; re-evaluate the selected checkpoint on a larger VAL set before comparing agents.
+- Picking the best of many periodic validations on a small VAL set is optimistic. The trainer therefore re-evaluates the best checkpoint *and* the final weights on `final_val_episodes` VAL seeds that follow the selection seeds (never used for selection) and writes `rl/weights/dqn_final_eval.json`; compare variants on those numbers, not on the selection score.
 
 ## 7. Open design items
 1. Pac-Man-centered view as an alternative to the absolute-grid network.

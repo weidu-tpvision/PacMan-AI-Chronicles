@@ -132,8 +132,9 @@ Every DQN training run must follow this standardized automated diagnostic workfl
 2. **Automated Multi-Panel Figure Generation**: The training runner must execute [`rl/plot_metrics.py`](rl/plot_metrics.py) at the end of training to generate:
    * **Vector Dashboard**: [`rl/weights/dqn_training_figures.svg`](rl/weights/dqn_training_figures.svg) (scalable publication quality).
    * **Raster Dashboard**: [`rl/weights/dqn_training_figures.png`](rl/weights/dqn_training_figures.png) (4-panel visual dashboard).
-3. **Artifact-Only Results**: Training conclusions (validation means, best-checkpoint episode, quartile analyses) and run parameters live in the artifacts above — **not** in this document, so this guide can never drift from the latest run.
-4. **Checkpoint Status**: No full DQN training run has been performed since the latest DQN and environment changes (including the collision-rule fix); the shipped checkpoint predates them and must be retrained before its scores are meaningful.
+3. **Unbiased Final Evaluation**: When a run completes, the trainer re-evaluates the best checkpoint and the final weights on VAL seeds not used for selection and writes `rl/weights/dqn_final_eval.json`; compare runs on these numbers, not on the (optimistic) selection score.
+4. **Artifact-Only Results**: Training conclusions (validation means, best-checkpoint episode, quartile analyses) and run parameters live in the artifacts above — **not** in this document, so this guide can never drift from the latest run.
+5. **Checkpoint Status**: No full DQN training run has been performed since the latest DQN and environment changes (including the collision-rule fix); the shipped checkpoint predates them and must be retrained before its scores are meaningful.
 
 ### 6. Standardized Simulation Engine (`core.environment.Environment`)
 * **Single Source of Truth**: All game arenas ([`pacman_game.py`](pacman_game.py), [`web_arena.py`](web_arena.py)), training pipelines ([`rl/train_dqn.py`](rl/train_dqn.py), [`rl/train_q_learning.py`](rl/train_q_learning.py), [`rl/optimize_policy.py`](rl/optimize_policy.py)), and tournament runners ([`compare_baselines.py`](compare_baselines.py)) share the exact same `core.environment.Environment` engine.
