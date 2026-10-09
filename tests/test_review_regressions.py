@@ -108,11 +108,10 @@ class TestReviewRegressions(unittest.TestCase):
     @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch is optional")
     def test_replay_preserves_next_action_mask_and_masks_argmax(self):
         buffer = ReplayBuffer(capacity=4)
-        state = np.zeros((1,), dtype=np.float32)
+        obs = (np.zeros((1, 2, 2), dtype=np.float32), np.zeros(2, dtype=np.float32))
         mask = np.array([True, False, True, False])
-        buffer.push(state, 0, 0.0, state, 0.0, mask)
-        sample = buffer.sample(1)
-        sampled_mask = sample[5]
+        buffer.push(obs, 0, 0.0, obs, 0.0, mask)
+        sampled_mask = buffer.sample(1)["next_action_masks"]
         self.assertTrue(torch.equal(sampled_mask[0], torch.tensor(mask)))
 
         q_values = torch.tensor([[1.0, 100.0, 2.0, 50.0]])

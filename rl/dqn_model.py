@@ -1,11 +1,16 @@
 """
 Deep Q-Network (DQN) PyTorch Architecture for Pac-Man.
-Encodes the maze using object-identity, motion, and environment-phase channels. Global
-features are repeated spatial planes so they can be consumed by the same convolutional
-network as the object maps.
+
+An observation is a pair (grid, scalars):
+- grid: binary spatial planes (maze, pellets, actor positions and headings) plus the
+  Scatter/Chase planes, which change what ghosts do locally;
+- scalars: stall progress and remaining horizon, which only change how much the future
+  is worth and therefore feed the dense layer directly.
+The encoding is a function of the current game state only (no history); see dqn.md.
 """
 
 from typing import List, Optional, Tuple
+
 import numpy as np
 
 try:
@@ -16,7 +21,7 @@ except ImportError:
     TORCH_AVAILABLE = False
     nn = object
 
-from core.environment import MODE_CYCLE, SCATTER_STEPS
+from core.environment import DEFAULT_MAX_STEPS, MODE_CYCLE, SCATTER_STEPS
 from core.maze_data import GRID_HEIGHT, GRID_WIDTH, WALL_CELLS
 
 ACTIONS = ["up", "down", "left", "right"]
@@ -24,177 +29,118 @@ ACTION_TO_IDX = {a: i for i, a in enumerate(ACTIONS)}
 IDX_TO_ACTION = {i: a for i, a in enumerate(ACTIONS)}
 
 GHOST_SLOTS = 3
-BASE_CHANNELS = 4  # walls, pellets, Pac-Man now, Pac-Man previously
-GHOST_POSITION_CHANNELS = 2 * GHOST_SLOTS
-PACMAN_HEADING_CHANNELS = 4
-GHOST_HEADING_CHANNELS = 4 * GHOST_SLOTS
-SCALAR_CHANNELS = 4  # scatter flag, cycle phase, stall progress, horizon remaining
-NUM_CHANNELS = BASE_CHANNELS + GHOST_POSITION_CHANNELS + PACMAN_HEADING_CHANNELS + GHOST_HEADING_CHANNELS + SCALAR_CHANNELS
+
+# Grid plane layout
+CH_WALLS = 0
+CH_PELLETS = 1
+CH_PACMAN = 2
+CH_GHOSTS = 3                                   # one plane per ghost identity
+CH_PACMAN_HEADING = CH_GHOSTS + GHOST_SLOTS     # 4 one-hot planes, set at Pac-Man's tile
+CH_GHOST_HEADINGS = CH_PACMAN_HEADING + 4       # 4 one-hot planes per ghost, at its tile
+CH_SCATTER = CH_GHOST_HEADINGS + 4 * GHOST_SLOTS
+CH_CYCLE_PHASE = CH_SCATTER + 1
+NUM_CHANNELS = CH_CYCLE_PHASE + 1
+
+# Scalar inputs to the dense layer
+SCALAR_STALL = 0
+SCALAR_HORIZON = 1
+NUM_SCALARS = 2
 
 # Steps without a pellet after which the trainer applies its stall penalty; the stall
-# plane saturates here, which keeps that penalty a function of the observation.
+# scalar saturates here, which keeps that penalty a function of the observation.
 STALL_STEPS = 45
 
-# Full-resolution network ("deep"): DEEP_CONV_LAYERS x (3x3 conv, DEEP_CONV_WIDTH ch)
-# -> receptive field (2 * DEEP_CONV_LAYERS + 1) tiles, then a 1x1 reduction to
-# DEEP_REDUCED_CHANNELS before the dense layer.
-DEEP_CONV_LAYERS = 6
-DEEP_CONV_WIDTH = 32
-DEEP_REDUCED_CHANNELS = 16
+# Full-resolution network: CONV_LAYERS x (3x3 conv, CONV_WIDTH channels) -> receptive
+# field (2 * CONV_LAYERS + 1) tiles, then a 1x1 reduction to REDUCED_CHANNELS before
+# the dense layer.
+CONV_LAYERS = 6
+CONV_WIDTH = 32
+REDUCED_CHANNELS = 16
 HIDDEN_UNITS = 128
-ARCHITECTURES = ("deep", "pool")
 
-# Precompute static walls mask (Channel 0)
 WALL_MAP = np.zeros((GRID_HEIGHT, GRID_WIDTH), dtype=np.float32)
 for x, y in WALL_CELLS:
     if 0 <= y < GRID_HEIGHT and 0 <= x < GRID_WIDTH:
         WALL_MAP[y, x] = 1.0
 
 
+def _on_grid(x: int, y: int) -> bool:
+    return 0 <= y < GRID_HEIGHT and 0 <= x < GRID_WIDTH
+
+
 def encode_state(
     pacman_pos: Tuple[int, int],
     ghost_positions: List[Tuple[int, int]],
     pellets: set,
-    prev_pacman_pos: Optional[Tuple[int, int]] = None,
-    prev_ghost_positions: Optional[List[Tuple[int, int]]] = None,
     last_move: Optional[str] = None,
     ghost_dirs: Optional[List[str]] = None,
     mode_step: int = 0,
     steps_without_pellet: int = 0,
-    steps_remaining: int = 300,
-    horizon: int = 300,
-) -> np.ndarray:
+    steps_remaining: int = DEFAULT_MAX_STEPS,
+    horizon: int = DEFAULT_MAX_STEPS,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Encode the current game state as (grid [NUM_CHANNELS, H, W], scalars [NUM_SCALARS]).
+
+    All values are binary or normalized to [0, 1]. `mode_step` is the environment clock
+    *before* the step being decided (the ghosts' next move uses mode_step + 1).
     """
-    Encode a Markov-oriented observation. Channel groups are ordered as base maps,
-    per-ghost current/previous maps, Pac-Man heading, per-ghost headings, then global
-    scatter/phase/stall/horizon planes. Heading and scalar channels are binary or
-    normalized to [0, 1].
-    """
-    state = np.zeros((NUM_CHANNELS, GRID_HEIGHT, GRID_WIDTH), dtype=np.float32)
-    state[0] = WALL_MAP
+    grid = np.zeros((NUM_CHANNELS, GRID_HEIGHT, GRID_WIDTH), dtype=np.float32)
+    grid[CH_WALLS] = WALL_MAP
 
     for fx, fy in pellets:
-        if 0 <= fy < GRID_HEIGHT and 0 <= fx < GRID_WIDTH:
-            state[1, fy, fx] = 1.0
+        if _on_grid(fx, fy):
+            grid[CH_PELLETS, fy, fx] = 1.0
 
     px, py = pacman_pos
-    if 0 <= py < GRID_HEIGHT and 0 <= px < GRID_WIDTH:
-        state[2, py, px] = 1.0
-
-    ghost_current_start = BASE_CHANNELS
-    ghost_previous_start = ghost_current_start + GHOST_SLOTS
-    for index, (gx, gy) in enumerate(ghost_positions[:GHOST_SLOTS]):
-        if 0 <= gy < GRID_HEIGHT and 0 <= gx < GRID_WIDTH:
-            state[ghost_current_start + index, gy, gx] = 1.0
-
-    # Temporal positions for velocity / direction inference
-    ppx, ppy = prev_pacman_pos if prev_pacman_pos is not None else pacman_pos
-    if 0 <= ppy < GRID_HEIGHT and 0 <= ppx < GRID_WIDTH:
-        state[3, ppy, ppx] = 1.0
-
-    prev_ghosts = prev_ghost_positions if prev_ghost_positions is not None else ghost_positions
-    for index, (pgx, pgy) in enumerate(prev_ghosts[:GHOST_SLOTS]):
-        if 0 <= pgy < GRID_HEIGHT and 0 <= pgx < GRID_WIDTH:
-            state[ghost_previous_start + index, pgy, pgx] = 1.0
-
-    cursor = BASE_CHANNELS + GHOST_POSITION_CHANNELS
-    directions = ["up", "down", "left", "right"]
-    if last_move in directions:
-        state[cursor + directions.index(last_move), :, :] = 1.0
-    cursor += PACMAN_HEADING_CHANNELS
+    if _on_grid(px, py):
+        grid[CH_PACMAN, py, px] = 1.0
+        if last_move in ACTION_TO_IDX:
+            grid[CH_PACMAN_HEADING + ACTION_TO_IDX[last_move], py, px] = 1.0
 
     ghost_dirs = ghost_dirs or ["up"] * GHOST_SLOTS
     for index, (gx, gy) in enumerate(ghost_positions[:GHOST_SLOTS]):
-        if index < len(ghost_dirs) and ghost_dirs[index] in directions and 0 <= gy < GRID_HEIGHT and 0 <= gx < GRID_WIDTH:
-            direction_channel = cursor + index * 4 + directions.index(ghost_dirs[index])
-            state[direction_channel, gy, gx] = 1.0
-    cursor += GHOST_HEADING_CHANNELS
+        if not _on_grid(gx, gy):
+            continue
+        grid[CH_GHOSTS + index, gy, gx] = 1.0
+        if index < len(ghost_dirs) and ghost_dirs[index] in ACTION_TO_IDX:
+            grid[CH_GHOST_HEADINGS + 4 * index + ACTION_TO_IDX[ghost_dirs[index]], gy, gx] = 1.0
 
-    # The current decision's ghost move occurs after mode_step increments.
-    next_mode_step = mode_step + 1
-    mode_in_cycle = (next_mode_step - 1) % MODE_CYCLE
-    state[cursor, :, :] = float(mode_in_cycle < SCATTER_STEPS)
-    state[cursor + 1, :, :] = mode_in_cycle / max(1, MODE_CYCLE - 1)
-    state[cursor + 2, :, :] = min(max(steps_without_pellet, 0), STALL_STEPS) / STALL_STEPS
-    state[cursor + 3, :, :] = min(max(steps_remaining, 0), max(1, horizon)) / max(1, horizon)
+    mode_in_cycle = mode_step % MODE_CYCLE  # phase of the ghosts' next move (clock mode_step + 1)
+    grid[CH_SCATTER] = float(mode_in_cycle < SCATTER_STEPS)
+    grid[CH_CYCLE_PHASE] = mode_in_cycle / max(1, MODE_CYCLE - 1)
 
-    return state
-
-
-def encode_frame(
-    pacman_pos: Tuple[int, int],
-    ghost_positions: List[Tuple[int, int]],
-    pellets: set,
-) -> np.ndarray:
-    """Backwards-compatibility alias for single-step encoding without history."""
-    return encode_state(pacman_pos, ghost_positions, pellets)
-
-
-def detect_architecture(state_dict) -> Tuple[str, bool]:
-    """(arch, dueling) of a saved PacmanDQN state dict, from its parameter names."""
-    arch = "deep" if "trunk.0.weight" in state_dict else "pool"
-    return arch, "value_head.weight" in state_dict
+    scalars = np.zeros(NUM_SCALARS, dtype=np.float32)
+    scalars[SCALAR_STALL] = min(max(steps_without_pellet, 0), STALL_STEPS) / STALL_STEPS
+    scalars[SCALAR_HORIZON] = min(max(steps_remaining, 0), max(1, horizon)) / max(1, horizon)
+    return grid, scalars
 
 
 if TORCH_AVAILABLE:
     class PacmanDQN(nn.Module):
         """
-        Deep Q-Network with identity-preserving spatial and state-context channels.
-
-        arch="deep" (default): a stack of 3x3 convolutions at full grid resolution (no
+        Dueling Deep Q-Network: a stack of 3x3 convolutions at full grid resolution (no
         pooling, so exact tile offsets between actors survive), a 1x1 channel reduction,
-        one dense layer and dueling heads.
-        arch="pool": the earlier two-conv + MaxPool2d(2) network, kept so existing
-        checkpoints load (dueling=False reproduces the oldest single-head checkpoints).
+        then one dense layer that also receives the scalar inputs, and V / A heads
+        combined as Q = V + A - mean(A).
         """
 
-        def __init__(self, in_channels: int = NUM_CHANNELS, num_actions: int = 4, dueling: bool = True, arch: str = "deep"):
+        def __init__(self, in_channels: int = NUM_CHANNELS, num_scalars: int = NUM_SCALARS, num_actions: int = 4):
             super().__init__()
-            if arch not in ARCHITECTURES:
-                raise ValueError(f"Unknown architecture {arch!r}; expected one of {ARCHITECTURES}")
-            self.arch = arch
-            self.dueling = dueling
+            layers, channels = [], in_channels
+            for _ in range(CONV_LAYERS):
+                layers += [nn.Conv2d(channels, CONV_WIDTH, kernel_size=3, padding=1), nn.ReLU()]
+                channels = CONV_WIDTH
+            layers += [nn.Conv2d(channels, REDUCED_CHANNELS, kernel_size=1), nn.ReLU(), nn.Flatten()]
+            self.trunk = nn.Sequential(*layers)
+            self.feature_head = nn.Sequential(
+                nn.Linear(REDUCED_CHANNELS * GRID_HEIGHT * GRID_WIDTH + num_scalars, HIDDEN_UNITS),
+                nn.ReLU(),
+            )
+            self.value_head = nn.Linear(HIDDEN_UNITS, 1)
+            self.advantage_head = nn.Linear(HIDDEN_UNITS, num_actions)
 
-            if arch == "deep":
-                layers, channels = [], in_channels
-                for _ in range(DEEP_CONV_LAYERS):
-                    layers += [nn.Conv2d(channels, DEEP_CONV_WIDTH, kernel_size=3, padding=1), nn.ReLU()]
-                    channels = DEEP_CONV_WIDTH
-                layers += [nn.Conv2d(channels, DEEP_REDUCED_CHANNELS, kernel_size=1), nn.ReLU()]
-                self.trunk = nn.Sequential(*layers)
-                flat_features = DEEP_REDUCED_CHANNELS * GRID_HEIGHT * GRID_WIDTH
-            else:
-                self.conv = nn.Sequential(
-                    nn.Conv2d(in_channels, 32, kernel_size=3, padding=1),
-                    nn.ReLU(),
-                    nn.Conv2d(32, 64, kernel_size=3, padding=1),
-                    nn.ReLU(),
-                    nn.MaxPool2d(kernel_size=2, stride=2),  # 21x19 -> 10x9
-                )
-                flat_features = 64 * (GRID_HEIGHT // 2) * (GRID_WIDTH // 2)
-
-            if dueling:
-                self.feature_head = nn.Sequential(
-                    nn.Flatten(),
-                    nn.Linear(flat_features, HIDDEN_UNITS),
-                    nn.ReLU(),
-                )
-                self.value_head = nn.Linear(HIDDEN_UNITS, 1)
-                self.advantage_head = nn.Linear(HIDDEN_UNITS, num_actions)
-            else:
-                # Retain the original module names and shapes so historical checkpoints load.
-                self.fc = nn.Sequential(
-                    nn.Flatten(),
-                    nn.Linear(flat_features, HIDDEN_UNITS),
-                    nn.ReLU(),
-                    nn.Linear(HIDDEN_UNITS, num_actions),
-                )
-
-        def forward(self, x: torch.Tensor) -> torch.Tensor:
-            features = self.trunk(x) if self.arch == "deep" else self.conv(x)
-            if not self.dueling:
-                return self.fc(features)
-            features = self.feature_head(features)
+        def forward(self, grid: torch.Tensor, scalars: torch.Tensor) -> torch.Tensor:
+            features = self.feature_head(torch.cat([self.trunk(grid), scalars], dim=1))
             value = self.value_head(features)
             advantage = self.advantage_head(features)
             return value + advantage - advantage.mean(dim=1, keepdim=True)

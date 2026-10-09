@@ -1,6 +1,6 @@
 """
 Deep Q-Network Agent: Executes forward passes on the trained PyTorch CNN model.
-Uses identity-preserving spatial channels with motion and environment-phase features.
+The observation is a function of the current game state only (see rl/dqn_model.py).
 
 Two evaluation modes:
   heuristics=False  -> pure greedy argmax over the network's Q-values (the policy that
@@ -23,25 +23,28 @@ from core.maze_data import DIRECTIONS, GRID_WIDTH, OPPOSITE_DIRECTIONS
 
 try:
     import torch
-    from rl.dqn_model import ACTION_TO_IDX, NUM_CHANNELS, PacmanDQN, detect_architecture, encode_state
+    from rl.dqn_model import ACTION_TO_IDX, PacmanDQN, encode_state
     TORCH_AVAILABLE = True
 except ImportError:  # pragma: no cover - exercised only on torch-less installs
     TORCH_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
-REVERSAL_PENALTY = 1.0
-ORBIT_PENALTY_PER_VISIT = 20.0
+# Q-values are in the trainer's reward units, where a pellet is worth 1
+# (SCORE_PELLET * REWARD_SCALE); the optional inference heuristics use the same units.
+REVERSAL_PENALTY = 0.1
+ORBIT_PENALTY_PER_VISIT = 1.5
+PROBABILITY_TEMPERATURE = 1.0  # softmax temperature for the displayed distribution
 
 
 class DQNAgent:
-    """Deep Q-Network Agent running a convolutional neural network with unentangled multi-channel velocity tracking.
+    """Deep Q-Network agent over the full-resolution dueling CNN.
 
-    Lifecycle contract: callers MUST call reset() on every new episode and on every
-    life-loss respawn (both arenas, the tournament runner, and the trainers already do).
-    Between resets, temporal history (previous positions, orbit memory, mode clock) is
-    assumed continuous; there is intentionally no in-agent teleport heuristic, which
-    could silently leak stale pre-death state for deaths near the spawn point.
+    The observation needs no agent history when callers pass the environment context
+    (`ghost_dirs`, `mode_step`, `steps_without_pellet`, `steps_remaining`; every in-repo
+    caller does). Small per-episode state remains only for the fallbacks used when that
+    context is omitted and for the optional anti-orbit heuristic; call reset() on a new
+    episode or respawn to clear it.
     """
 
     def __init__(
@@ -62,8 +65,7 @@ class DQNAgent:
         self.name = name
         self.category = "Deep Neural RL (PyTorch CNN)"
         self.heuristics = heuristics
-        self.prev_pacman: Optional[Tuple[int, int]] = None
-        self.prev_ghosts: Optional[List[Tuple[int, int]]] = None
+        self.prev_ghosts: Optional[List[Tuple[int, int]]] = None  # only for heading inference
         self.recent_positions: collections.deque = collections.deque(maxlen=16)
         self.last_pellet_count: Optional[int] = None
         self._mode_step = 0
@@ -82,32 +84,15 @@ class DQNAgent:
             self.device = torch.device("cpu")
             try:
                 state_dict = torch.load(self.model_path, map_location=self.device, weights_only=True)
-                # Architecture (full-resolution "deep" vs legacy "pool") and dueling head are
-                # read from the parameter names, so every shipped checkpoint generation loads.
-                arch, dueling = detect_architecture(state_dict)
-                model = PacmanDQN(in_channels=NUM_CHANNELS, dueling=dueling, arch=arch).to(self.device)
-                self.arch = arch
-                first_weight = state_dict.get("conv.0.weight")
-                if first_weight is not None and first_weight.shape[1] == 6:
-                    # Expand legacy merged-ghost channels into the new per-ghost planes.
-                    migrated = model.state_dict()
-                    for key, value in state_dict.items():
-                        if key != "conv.0.weight" and key in migrated and migrated[key].shape == value.shape:
-                            migrated[key] = value
-                    expanded = torch.zeros_like(migrated["conv.0.weight"])
-                    mapping = {0: [0], 1: [1], 2: [2], 4: [3]}
-                    mapping[3] = [4, 5, 6]
-                    mapping[5] = [7, 8, 9]
-                    for old_channel, new_channels in mapping.items():
-                        for new_channel in new_channels:
-                            expanded[:, new_channel] = first_weight[:, old_channel]
-                    migrated["conv.0.weight"] = expanded
-                    state_dict = migrated
+                model = PacmanDQN().to(self.device)
                 model.load_state_dict(state_dict)
                 model.eval()
                 self.model = model
                 self.model_loaded = True
-            except Exception as exc:  # corrupted / incompatible checkpoint
+            except RuntimeError as exc:  # parameter names / shapes differ
+                problem = (f"checkpoint {self.model_path} does not match the current network / observation "
+                           f"encoding (trained by an older version?) - retrain with rl/train_dqn.py ({exc.__class__.__name__})")
+            except Exception as exc:  # corrupted / unreadable checkpoint
                 problem = f"failed to load checkpoint {self.model_path}: {exc}"
 
         if problem:
@@ -118,7 +103,6 @@ class DQNAgent:
 
     def reset(self):
         """Reset temporal state tracking for a new game episode."""
-        self.prev_pacman = None
         self.prev_ghosts = None
         self.recent_positions.clear()
         self.last_pellet_count = None
@@ -177,12 +161,10 @@ class DQNAgent:
         effective_stall_steps = self._steps_without_pellet if steps_without_pellet is None else steps_without_pellet
         effective_remaining = max(0, horizon - self._decision_count) if steps_remaining is None else steps_remaining
 
-        state_arr = encode_state(
+        grid, scalars = encode_state(
             pacman_pos=pacman_pos,
             ghost_positions=ghost_positions,
             pellets=pellets,
-            prev_pacman_pos=self.prev_pacman,
-            prev_ghost_positions=self.prev_ghosts,
             last_move=last_move,
             ghost_dirs=ghost_dirs,
             mode_step=effective_mode_step,
@@ -191,15 +173,15 @@ class DQNAgent:
             horizon=horizon,
         )
 
-        # Update previous positions for next step
-        self.prev_pacman = tuple(pacman_pos)
         self.prev_ghosts = [tuple(g) for g in ghost_positions]
         self._mode_step = effective_mode_step + 1
         self._decision_count += 1
 
         with torch.no_grad():
-            s_tensor = torch.from_numpy(state_arr).unsqueeze(0).to(self.device)
-            raw_q = self.model(s_tensor).squeeze(0)
+            raw_q = self.model(
+                torch.from_numpy(grid).unsqueeze(0).to(self.device),
+                torch.from_numpy(scalars).unsqueeze(0).to(self.device),
+            ).squeeze(0)
 
         legal_q = {m: raw_q[ACTION_TO_IDX[m]].item() for m in legal_moves}
 
@@ -221,7 +203,7 @@ class DQNAgent:
         best_q = max(legal_q.values())
         choice = random.choice([m for m in legal_moves if legal_q[m] == best_q])
 
-        dist = softmax(legal_q, temp=15.0)
+        dist = softmax(legal_q, temp=PROBABILITY_TEMPERATURE)
         return DecisionResult(
             choice=choice,
             probabilities=dist,

@@ -142,12 +142,20 @@ def build_agents(model: str, host: str, sys1_live: bool):
         print(f"[WARN] System 1 endpoint {sys1_backend.api_url} did not answer; using the offline simulator.")
         sys1_backend.prefer_live = False
     mode_label = f"Live {model}" if is_live else "Simulator"
+    try:
+        dqn_agents = [
+            DQNAgent(name="DQN (raw network)", heuristics=False, require_weights=True),
+            DQNAgent(name="DQN (+inference heuristics)", heuristics=True, require_weights=True),
+        ]
+    except RuntimeError as exc:
+        # Never benchmark the random fallback under a DQN name; run the other agents.
+        print(f"[WARN] Skipping DQN rows: {exc}")
+        dqn_agents = []
     return [
         RandomAgent("Random Agent (Baseline)"),
         GreedyHeuristicAgent("Greedy Heuristic"),
         PretrainedQLearningAgent("Q-Learning (Textbook TD)"),
-        DQNAgent(name="DQN (raw network)", heuristics=False, require_weights=True),
-        DQNAgent(name="DQN (+inference heuristics)", heuristics=True, require_weights=True),
+        *dqn_agents,
         TrainedQLearningAgent(name="RL (Policy Optimized, CEM)"),
         SystemOneBaselineAgent(sys1_backend, f"System 1 [{mode_label}]"),
     ]

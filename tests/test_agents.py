@@ -101,37 +101,29 @@ class TestAgentSuite(unittest.TestCase):
                     )
 
     @unittest.skipUnless(importlib.util.find_spec("torch"), "PyTorch is optional")
-    def test_dqn_temporal_velocity_tracking_and_toroidal_preservation(self):
-        """Verify DQNAgent retains velocity state across toroidal warp tunnel moves."""
-        dqn = self.dqn_agent
-        dqn.reset()
-        self.assertIsNone(dqn.prev_pacman)
-        self.assertIsNone(dqn.prev_ghosts)
+    def test_dqn_decision_depends_only_on_current_state(self):
+        """With environment context passed, earlier calls must not influence a decision."""
+        import os
+        import tempfile
 
-        # Step 1: Normal move
-        dqn.decide((1, 9), [(5, 7)], set(), ["left", "right"])
-        self.assertEqual(dqn.prev_pacman, (1, 9))
+        import torch
+        from rl.dqn_model import PacmanDQN
 
-        # Step 2: Move into leftmost warp tunnel cell (x=0)
-        dqn.decide((0, 9), [(5, 7)], set(), ["left", "right"])
-        self.assertEqual(dqn.prev_pacman, (0, 9))
+        torch.manual_seed(0)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "random_init.pt")
+            torch.save(PacmanDQN().state_dict(), path)
+            dqn = DQNAgent(model_path=path, heuristics=False, require_weights=True)
 
-        # Step 3: Wrap through tunnel to right side (x=GRID_WIDTH-1)
-        # Toroidal distance is 1 (wraps around), so velocity should NOT be wiped
-        dqn.decide((GRID_WIDTH - 1, 9), [(5, 7)], set(), ["left", "right"])
-        self.assertIsNotNone(
-            dqn.prev_pacman,
-            "DQNAgent incorrectly wiped velocity tracking on horizontal warp tunnel traverse",
-        )
-        self.assertEqual(dqn.prev_pacman, (GRID_WIDTH - 1, 9))
-
-        # Step 4: position jumps (respawn / new episode) are the caller's responsibility:
-        # there is no in-agent teleport heuristic; reset() clears temporal tracking.
-        dqn.decide((5, 18), [(5, 7)], set(), ["up", "down"])
-        self.assertEqual(dqn.prev_pacman, (5, 18))
-        dqn.reset()
-        self.assertIsNone(dqn.prev_pacman)
-        self.assertIsNone(dqn.prev_ghosts)
+        env = Environment(seed=7)
+        ctx = dict(mode_step=3, ghost_dirs=["up", "left", "right"], steps_without_pellet=2, steps_remaining=250)
+        state = ((9, 15), [(9, 7), (7, 7), (11, 7)], env.pellets, ["left", "right"], "left")
+        first = dqn.decide(*state, **ctx)
+        # Unrelated states in between, including a tunnel wrap
+        dqn.decide((0, 9), [(5, 7)], set(), ["left", "right"], "left", **ctx)
+        dqn.decide((GRID_WIDTH - 1, 9), [(5, 7)], set(), ["left", "right"], "left", **ctx)
+        again = dqn.decide(*state, **ctx)
+        self.assertEqual(first.probabilities, again.probabilities)
 
 
 if __name__ == "__main__":

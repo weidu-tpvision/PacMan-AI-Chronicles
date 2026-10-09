@@ -7,18 +7,18 @@ from rl.dqn_model import (
     ACTIONS,
     ACTION_TO_IDX,
     IDX_TO_ACTION,
-    PacmanDQN,
-    encode_frame,
-    encode_state,
     NUM_CHANNELS,
+    NUM_SCALARS,
+    PacmanDQN,
+    encode_state,
 )
 
 __all__ = [
     "ACTIONS",
     "ACTION_TO_IDX",
     "IDX_TO_ACTION",
-    "PacmanDQN",
-    "encode_frame",
-    "encode_state",
     "NUM_CHANNELS",
+    "NUM_SCALARS",
+    "PacmanDQN",
+    "encode_state",
 ]

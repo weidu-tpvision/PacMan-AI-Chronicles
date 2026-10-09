@@ -50,7 +50,7 @@ system_one/
 │   └── __init__.py              # Agent registry exports
 │
 ├── rl/                          # Reinforcement Learning Subsystem
-│   ├── dqn_model.py             # PacmanDQN CNN and the 30-channel encode_state
+│   ├── dqn_model.py             # PacmanDQN CNN and the (grid, scalars) encode_state
 │   ├── train_dqn.py             # Double-DQN training pipeline with ReplayBuffer & metrics
 │   ├── plot_metrics.py          # Visualization generator (PNG & vector SVG figures)
 │   ├── train_q_learning.py      # Approximate linear TD Q-learning trainer
@@ -73,6 +73,7 @@ system_one/
 │
 ├── tests/                       # Automated Test Suite
 │   ├── test_agents.py           # Agent instantiation and decision verification
+│   ├── test_dqn_encoding.py     # DQN observation layout and history-freedom
 │   ├── test_environment.py      # Scatter/Chase clock, collision rule, tunnel wrap
 │   ├── test_facades.py          # Root compatibility facades
 │   ├── test_train_resume.py     # Exact DQN stop/resume, Ctrl+C checkpoints
@@ -94,30 +95,25 @@ system_one/
 
 The DQN subsystem implements DeepMind-inspired Deep Reinforcement Learning with unentangled multi-channel perception and velocity awareness:
 
-### 1. Markov-Oriented 30-Channel State Encoding (`encode_state`)
-Rather than compressing objects into a scalar matrix where negative values collide under ReLU, the state is a 30-channel tensor `(30, 21, 19)` built from binary spatial maps plus normalized scalar planes (see `rl/dqn_model.py` and `dqn.md` for the authoritative description):
-* **Channel 0**: Static Walls ($1.0 = \text{Wall}$, $0.0 = \text{Corridor}$)
-* **Channel 1**: Pellets remaining ($1.0 = \text{Pellet}$, $0.0 = \text{Empty}$)
-* **Channels 2–3**: Pac-Man current position at $t$ and previous position at $t-1$
-* **Channels 4–9**: Per-ghost current and previous position maps (identity-preserving: one pair per ghost, since ghosts have distinct behaviors)
-* **Channels 10–13**: Pac-Man heading (one-hot `up/down/left/right` planes)
-* **Channels 14–25**: Per-ghost heading one-hot planes (4 per ghost)
-* **Channels 26–29**: Global scalar planes — scatter-mode flag, Scatter/Chase cycle phase, stall progress, remaining episode horizon
+### 1. Markov-Oriented, History-Free State Encoding (`encode_state`)
+The observation is a pair `(grid, scalars)` computed from the current game state only (see `rl/dqn_model.py` and `dqn.md` for the authoritative layout):
+* **Grid planes**: walls, pellets, Pac-Man position, one position map per ghost, Pac-Man heading and per-ghost headings (one-hot, set at each actor's own tile), Scatter flag and Scatter/Chase cycle phase.
+* **Scalars** (fed to the dense layer): stall progress and remaining episode horizon — they only change the value of the future, not local dynamics.
+* No previous-position maps: previous position = position − heading for every actor, so headings carry the motion information.
 
-### 2. Temporal Velocity Tracking & Inertia
-* By cross-correlating current/previous position pairs — Pac-Man $(2, 3)$ and ghosts $(4, 7)$, $(5, 8)$, $(6, 9)$ — 2D convolutional kernels can compute **velocity vectors $(\Delta x, \Delta y)$**; the heading planes (10–25) supply directions explicitly.
+### 2. Inertia & Loop Handling
 * **Momentum Regulation**: Reversal penalties during training (`R_REVERSAL` in `rl/train_dqn.py`) and inference (`REVERSAL_PENALTY` in `agents/dqn_agent.py`) discourage micro-oscillations between adjacent empty corridor cells.
 * **Stall Penalty**: Once `STALL_STEPS` steps pass without a pellet, every further step costs `R_STALL_PER_STEP`. Stalls are penalized, not truncated, so training episodes end exactly where evaluation episodes do.
 * **Score-Aligned Reward**: The reward is the tournament score delta scaled by `REWARD_SCALE` plus the small shaping terms above; see `dqn.md` for the rationale (including the long discount).
 * **Anti-Orbit Dynamic Memory**: A rolling position buffer (`recent_positions`) tracks repeated tile visits during inference. When no pellets have been eaten and a candidate move leads into repeatedly visited empty corridors, a penalty proportional to the visit count (`ORBIT_PENALTY_PER_VISIT`) is subtracted, allowing the agent to exit local corridor limit cycles without retraining.
 
-### 3. Full-Resolution Neural Architecture (`PacmanDQN`, `arch="deep"`)
-* **Input**: `(batch, 30, 21, 19)`
-* **Convolution stack**: `DEEP_CONV_LAYERS` x (`Conv2d(3x3, padding=1)` + ReLU) at full grid resolution, **no pooling** — exact tile offsets between actors are preserved while the receptive field grows by 2 tiles per layer.
-* **Channel reduction**: `Conv2d(1x1)` to `DEEP_REDUCED_CHANNELS` + ReLU, keeping the dense layer small.
-* **Shared feature head**: `Linear(DEEP_REDUCED_CHANNELS * 21 * 19, HIDDEN_UNITS)` + ReLU
+### 3. Full-Resolution Neural Architecture (`PacmanDQN`)
+* **Input**: grid `(batch, NUM_CHANNELS, 21, 19)` and scalars `(batch, NUM_SCALARS)`
+* **Convolution stack**: `CONV_LAYERS` x (`Conv2d(3x3, padding=1)` + ReLU) at full grid resolution, **no pooling** — exact tile offsets between actors are preserved while the receptive field grows by 2 tiles per layer.
+* **Channel reduction**: `Conv2d(1x1)` to `REDUCED_CHANNELS` + ReLU, keeping the dense layer small.
+* **Shared feature head**: `Linear(REDUCED_CHANNELS * 21 * 19 + NUM_SCALARS, HIDDEN_UNITS)` + ReLU (flattened features concatenated with the scalars)
 * **Dueling heads**: `Linear(HIDDEN_UNITS, 1)` for state value $V(s)$ and `Linear(HIDDEN_UNITS, 4)` for action advantages $A(s,a)$.
-* **Legacy `arch="pool"`**: the earlier two-conv + `MaxPool2d(2)` network, kept only so older checkpoints load; `DQNAgent` detects the architecture from parameter names.
+* **Checkpoint compatibility**: checkpoints from earlier encodings/networks are rejected with a "retrain" message; the agent falls back to `[UNTRAINED]` and the tournament skips the DQN rows.
 * **Aggregation**: $Q(s,a)=V(s)+A(s,a)-\operatorname{mean}_{a'}A(s,a')$, outputting Q-values for `[up, down, left, right]`.
 
 ### 4. Double DQN & Optimization

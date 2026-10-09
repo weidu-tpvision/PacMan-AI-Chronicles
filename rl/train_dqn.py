@@ -1,7 +1,7 @@
 """
 Training pipeline for Deep Q-Network (DQN) and Double-DQN on Pac-Man.
 Implements:
-- Identity-preserving state encoding with motion, mode, stall, and horizon features
+- History-free observation: identity-preserving grid planes + stall/horizon scalars
 - Full-resolution convolution stack (no pooling) with dueling heads (see dqn.md)
 - Prioritized Experience Replay with importance-sampling correction
 - Target Network (Double DQN to prevent Q-value overestimation), legal-action masks
@@ -44,12 +44,12 @@ except ImportError:
 from core.environment import DEFAULT_MAX_STEPS, SCORE_DEATH, SCORE_PELLET, SCORE_WIN, Environment
 from core.maze_data import OPPOSITE_DIRECTIONS
 from core.seeds import seed_everything, train_seed, val_seeds
-from rl.dqn_model import ACTION_TO_IDX, ARCHITECTURES, NUM_CHANNELS, STALL_STEPS, PacmanDQN, encode_state
+from rl.dqn_model import ACTION_TO_IDX, NUM_CHANNELS, NUM_SCALARS, STALL_STEPS, PacmanDQN, encode_state
 
 DEFAULT_WEIGHTS_DIR = os.path.join(os.path.dirname(__file__), "weights")
 DEFAULT_MODEL_PATH = os.path.join(DEFAULT_WEIGHTS_DIR, "dqn_pacman.pt")
 TRAINING_STATE_NAME = "dqn_training_state.pt"
-TRAINING_STATE_VERSION = 2  # v2: arch in config, score-aligned reward, no stall cutoff
+TRAINING_STATE_VERSION = 3  # v3: (grid, scalars) observations, history-free encoding
 
 # Reward: the evaluation score (SCORE_* in core.environment) scaled to a small range,
 # so the agent optimizes exactly what the tournament measures, plus two small shaping
@@ -91,10 +91,20 @@ def compute_reward(
     return r, stalled
 
 
-def greedy_action(policy_net, state: np.ndarray, legal) -> str:
+def observe(env: Environment, steps_without_pellet: int, steps_remaining: int, horizon: int):
+    """(grid, scalars) observation of the environment's current state."""
+    return encode_state(
+        tuple(env.pacman_pos), [tuple(g) for g in env.ghost_positions], env.pellets,
+        last_move=env.last_move, ghost_dirs=env.ghost_dirs, mode_step=env.mode_step,
+        steps_without_pellet=steps_without_pellet, steps_remaining=steps_remaining, horizon=horizon,
+    )
+
+
+def greedy_action(policy_net, obs, legal) -> str:
     """Pure greedy argmax over legal actions (ties broken by the global RNG)."""
+    grid, scalars = obs
     with torch.no_grad():
-        q = policy_net(torch.from_numpy(state).unsqueeze(0)).squeeze(0)
+        q = policy_net(torch.from_numpy(grid).unsqueeze(0), torch.from_numpy(scalars).unsqueeze(0)).squeeze(0)
     legal_q = {m: q[ACTION_TO_IDX[m]].item() for m in legal}
     best = max(legal_q.values())
     return random.choice([m for m in legal if legal_q[m] == best])
@@ -109,11 +119,11 @@ def masked_next_actions(q_values: torch.Tensor, legal_action_masks: torch.Tensor
 class ReplayBuffer:
     """Proportional prioritized replay with importance-sampling correction.
 
-    Transitions live in preallocated ring arrays (allocated on the first push, once the
-    state shape is known). States are stored as float16: the binary channels are exact
-    in fp16 and the scalar planes keep ~3 decimal digits (ample for stall/horizon/cycle
-    features), halving buffer RAM. sample() upcasts to float32 tensors. The arrays also
-    make state_dict() a zero-copy snapshot for resumable training checkpoints.
+    Observations are (grid, scalars) pairs stored in preallocated ring arrays (allocated
+    on the first push, once the shapes are known). Grids are stored as float16 (they are
+    binary apart from the cycle-phase plane, which keeps ~3 decimal digits), halving
+    RAM; scalars stay float32. sample() returns float32 tensors. The arrays also make
+    state_dict() a zero-copy snapshot for resumable training checkpoints.
     """
     def __init__(self, capacity: int = 40000, rng: Optional[random.Random] = None, alpha: float = 0.6, priority_epsilon: float = 1e-5):
         self.capacity = capacity
@@ -124,22 +134,28 @@ class ReplayBuffer:
         self.position = 0
         self.size = 0
         self.max_priority = 1.0  # new transitions get the highest priority seen so far
-        self.states = self.next_states = None
+        self.grids = self.scalars = self.next_grids = self.next_scalars = None
         self.actions = np.zeros(capacity, dtype=np.int64)
         self.rewards = np.zeros(capacity, dtype=np.float32)
         self.dones = np.zeros(capacity, dtype=np.float32)
         self.next_action_masks = np.ones((capacity, len(ACTION_TO_IDX)), dtype=np.bool_)
 
-    def _allocate(self, state_shape):
-        self.states = np.zeros((self.capacity, *state_shape), dtype=np.float16)
-        self.next_states = np.zeros((self.capacity, *state_shape), dtype=np.float16)
+    def _allocate(self, grid_shape, num_scalars: int):
+        self.grids = np.zeros((self.capacity, *grid_shape), dtype=np.float16)
+        self.next_grids = np.zeros((self.capacity, *grid_shape), dtype=np.float16)
+        self.scalars = np.zeros((self.capacity, num_scalars), dtype=np.float32)
+        self.next_scalars = np.zeros((self.capacity, num_scalars), dtype=np.float32)
 
-    def push(self, state, action_idx, reward, next_state, done, next_action_mask=None):
-        if self.states is None:
-            self._allocate(np.shape(state))
+    def push(self, obs, action_idx, reward, next_obs, done, next_action_mask=None):
+        grid, scalars = obs
+        next_grid, next_scalars = next_obs
+        if self.grids is None:
+            self._allocate(np.shape(grid), len(scalars))
         i = self.position
-        self.states[i] = state
-        self.next_states[i] = next_state
+        self.grids[i] = grid
+        self.scalars[i] = scalars
+        self.next_grids[i] = next_grid
+        self.next_scalars[i] = next_scalars
         self.actions[i] = action_idx
         self.rewards[i] = reward
         self.dones[i] = done
@@ -148,23 +164,25 @@ class ReplayBuffer:
         self.position = (i + 1) % self.capacity
         self.size = min(self.size + 1, self.capacity)
 
-    def sample(self, batch_size: int, beta: float = 0.4):
+    def sample(self, batch_size: int, beta: float = 0.4) -> dict:
         priorities = self.priorities[:self.size]
         scaled = priorities ** self.alpha
         probabilities = scaled / scaled.sum()
         indices = self.rng.choices(range(self.size), weights=probabilities, k=batch_size)
         weights = (self.size * probabilities[indices]) ** (-beta)
         weights /= weights.max()
-
-        states_t = torch.from_numpy(self.states[indices].astype(np.float32))
-        actions_t = torch.from_numpy(self.actions[indices]).unsqueeze(1)
-        rewards_t = torch.from_numpy(self.rewards[indices]).unsqueeze(1)
-        next_states_t = torch.from_numpy(self.next_states[indices].astype(np.float32))
-        dones_t = torch.from_numpy(self.dones[indices]).unsqueeze(1)
-        next_action_masks_t = torch.from_numpy(self.next_action_masks[indices])
-
-        weights_t = torch.tensor(weights, dtype=torch.float32).unsqueeze(1)
-        return states_t, actions_t, rewards_t, next_states_t, dones_t, next_action_masks_t, indices, weights_t
+        return {
+            "grids": torch.from_numpy(self.grids[indices].astype(np.float32)),
+            "scalars": torch.from_numpy(self.scalars[indices]),
+            "actions": torch.from_numpy(self.actions[indices]).unsqueeze(1),
+            "rewards": torch.from_numpy(self.rewards[indices]).unsqueeze(1),
+            "next_grids": torch.from_numpy(self.next_grids[indices].astype(np.float32)),
+            "next_scalars": torch.from_numpy(self.next_scalars[indices]),
+            "dones": torch.from_numpy(self.dones[indices]).unsqueeze(1),
+            "next_action_masks": torch.from_numpy(self.next_action_masks[indices]),
+            "indices": indices,
+            "weights": torch.tensor(weights, dtype=torch.float32).unsqueeze(1),
+        }
 
     def update_priorities(self, indices, td_errors):
         for index, error in zip(indices, td_errors):
@@ -172,21 +190,21 @@ class ReplayBuffer:
             self.priorities[index] = priority
             self.max_priority = max(self.max_priority, priority)
 
+    _OBS_ARRAYS = ("grids", "scalars", "next_grids", "next_scalars")
+    _TRANSITION_ARRAYS = ("priorities", "actions", "rewards", "dones", "next_action_masks")
+
     def state_dict(self) -> dict:
         """Tensor snapshot of the filled part of the buffer (shares memory, no copy)."""
         n = self.size
         state = {
             "capacity": self.capacity, "alpha": self.alpha, "priority_epsilon": self.priority_epsilon,
             "position": self.position, "size": n, "max_priority": self.max_priority,
-            "priorities": torch.from_numpy(self.priorities[:n]),
-            "actions": torch.from_numpy(self.actions[:n]),
-            "rewards": torch.from_numpy(self.rewards[:n]),
-            "dones": torch.from_numpy(self.dones[:n]),
-            "next_action_masks": torch.from_numpy(self.next_action_masks[:n]),
         }
-        if self.states is not None:
-            state["states"] = torch.from_numpy(self.states[:n])
-            state["next_states"] = torch.from_numpy(self.next_states[:n])
+        for name in self._TRANSITION_ARRAYS:
+            state[name] = torch.from_numpy(getattr(self, name)[:n])
+        if self.grids is not None:
+            for name in self._OBS_ARRAYS:
+                state[name] = torch.from_numpy(getattr(self, name)[:n])
         return state
 
     def load_state_dict(self, state: dict) -> None:
@@ -198,15 +216,12 @@ class ReplayBuffer:
         self.position = state["position"]
         self.size = n
         self.max_priority = state["max_priority"]
-        self.priorities[:n] = state["priorities"].numpy()
-        self.actions[:n] = state["actions"].numpy()
-        self.rewards[:n] = state["rewards"].numpy()
-        self.dones[:n] = state["dones"].numpy()
-        self.next_action_masks[:n] = state["next_action_masks"].numpy()
-        if "states" in state:
-            self._allocate(tuple(state["states"].shape[1:]))
-            self.states[:n] = state["states"].numpy()
-            self.next_states[:n] = state["next_states"].numpy()
+        for name in self._TRANSITION_ARRAYS:
+            getattr(self, name)[:n] = state[name].numpy()
+        if "grids" in state:
+            self._allocate(tuple(state["grids"].shape[1:]), state["scalars"].shape[1])
+            for name in self._OBS_ARRAYS:
+                getattr(self, name)[:n] = state[name].numpy()
 
     def __len__(self):
         return self.size
@@ -251,21 +266,12 @@ def evaluate_dqn(policy_net: nn.Module, episodes: int = 15, max_steps: int = DEF
         seed_everything(seed)
         env = Environment(seed=seed)
         score = pellets_count = 0
-        prev_p = prev_g = None
 
         steps_without_pellet = 0
         for step_index in range(max_steps):
             legal = env.get_legal_moves(*env.pacman_pos)
-            curr_p = tuple(env.pacman_pos)
-            curr_g = [tuple(g) for g in env.ghost_positions]
-            state = encode_state(
-                curr_p, curr_g, env.pellets, prev_p, prev_g, last_move=env.last_move,
-                ghost_dirs=env.ghost_dirs, mode_step=env.mode_step,
-                steps_without_pellet=steps_without_pellet,
-                steps_remaining=max_steps - step_index, horizon=max_steps,
-            )
-            move = greedy_action(policy_net, state, legal)
-            prev_p, prev_g = curr_p, curr_g
+            obs = observe(env, steps_without_pellet, max_steps - step_index, max_steps)
+            move = greedy_action(policy_net, obs, legal)
 
             collided, ate_pellet, won = env.step(move)
             steps_without_pellet = 0 if ate_pellet else steps_without_pellet + 1
@@ -308,7 +314,6 @@ def train_dqn(
     checkpoint_path: Optional[str] = None,
     resume: bool = False,
     stop_after: Optional[int] = None,
-    arch: str = "deep",
 ):
     """Train (or resume training) the DQN.
 
@@ -339,7 +344,6 @@ def train_dqn(
         per_beta_start, target_update_steps = cfg["per_beta_start"], cfg["target_update_steps"]
         warmup_steps, max_steps, val_every, val_episodes = cfg["warmup_steps"], cfg["max_steps"], cfg["val_every"], cfg["val_episodes"]
         seed, save_path, buffer_capacity = cfg["seed"], cfg["save_path"], cfg["buffer_capacity"]
-        arch = cfg["arch"]
 
     config = {
         "episodes": episodes, "lr": lr, "batch_size": batch_size, "gamma": gamma,
@@ -347,7 +351,6 @@ def train_dqn(
         "per_beta_start": per_beta_start, "target_update_steps": target_update_steps,
         "warmup_steps": warmup_steps, "max_steps": max_steps, "val_every": val_every,
         "val_episodes": val_episodes, "seed": seed, "save_path": save_path, "buffer_capacity": buffer_capacity,
-        "arch": arch,
     }
 
     seed_everything(seed)
@@ -360,8 +363,8 @@ def train_dqn(
     csv_path = os.path.join(weights_dir, "dqn_training_metrics.csv")
 
     device = torch.device("cpu")
-    policy_net = PacmanDQN(in_channels=NUM_CHANNELS, arch=arch).to(device)
-    target_net = PacmanDQN(in_channels=NUM_CHANNELS, arch=arch).to(device)
+    policy_net = PacmanDQN().to(device)
+    target_net = PacmanDQN().to(device)
     target_net.load_state_dict(policy_net.state_dict())
     target_net.eval()
 
@@ -433,9 +436,9 @@ def train_dqn(
                       f"({os.path.relpath(checkpoint_path)}, {len(replay_buffer):,} replay transitions)\n")
         else:
             log_print("======================================================================")
-            log_print(f" DEEP Q-NETWORK (DQN) TRAINING: {NUM_CHANNELS}-Channel State Encoder")
+            log_print(f" DEEP Q-NETWORK (DQN) TRAINING: {NUM_CHANNELS} grid planes + {NUM_SCALARS} scalars")
             log_print("======================================================================")
-            log_print(f"Device: {device} | Arch: {arch} | Batch Size: {batch_size} | Learning Rate: {lr} | Gamma: {gamma} | Seed: {seed}")
+            log_print(f"Device: {device} | Batch Size: {batch_size} | Learning Rate: {lr} | Gamma: {gamma} | Seed: {seed}")
             log_print(f"Episodes: {episodes} | Horizon: {max_steps} | Target Sync: every {target_update_steps} steps")
             log_print(f"Validation: {val_episodes} VAL seeds every {val_every} episodes (pure greedy policy)")
             log_print(f"Training state: {os.path.relpath(checkpoint_path)} every {checkpoint_every} episodes\n")
@@ -443,40 +446,25 @@ def train_dqn(
 
             # ---- Warm-up phase (uniform random policy) ----
             env = Environment(seed=train_seed(rng))
-            prev_p = prev_g = None
             for _ in range(warmup_steps):
                 legal = env.get_legal_moves(*env.pacman_pos)
-                curr_p = tuple(env.pacman_pos)
-                curr_g = [tuple(g) for g in env.ghost_positions]
-                s = encode_state(
-                    curr_p, curr_g, env.pellets, prev_p, prev_g, last_move=env.last_move,
-                    ghost_dirs=env.ghost_dirs, mode_step=env.mode_step,
-                    steps_without_pellet=env.steps_without_pellet,
-                    steps_remaining=max(0, max_steps - env.step_count), horizon=max_steps,
-                )
+                s = observe(env, env.steps_without_pellet, max(0, max_steps - env.step_count), max_steps)
 
                 m = rng.choice(legal)
                 prev_move = env.last_move
                 col, ate, won = env.step(m)
                 r, _ = compute_reward(prev_move, m, ate, col, won, len(legal), env.steps_without_pellet)
 
-                ns = encode_state(
-                    tuple(env.pacman_pos), [tuple(g) for g in env.ghost_positions], env.pellets, curr_p, curr_g,
-                    last_move=env.last_move, ghost_dirs=env.ghost_dirs, mode_step=env.mode_step,
-                    steps_without_pellet=env.steps_without_pellet,
-                    steps_remaining=max(0, max_steps - env.step_count), horizon=max_steps,
-                )
+                ns = observe(env, env.steps_without_pellet, max(0, max_steps - env.step_count), max_steps)
                 next_legal = env.get_legal_moves(*env.pacman_pos)
                 next_mask = np.array([a in next_legal for a in ACTION_TO_IDX], dtype=np.bool_)
                 if not next_mask.any():
                     next_mask[:] = True
                 done = col or won or env.step_count >= max_steps
                 replay_buffer.push(s, ACTION_TO_IDX[m], r, ns, float(done), next_mask)
-                prev_p, prev_g = curr_p, curr_g
 
                 if done:
                     env = Environment(seed=train_seed(rng))
-                    prev_p = prev_g = None
 
             log_print("Warm-up complete! Beginning DQN neural optimization...\n")
 
@@ -492,21 +480,13 @@ def train_dqn(
                 pellets_eaten = 0
                 collided = won = False
                 steps_without_pellet = 0
-                prev_p = prev_g = None
                 ep_losses = []
                 steps = 0
 
                 for steps in range(1, max_steps + 1):
                     total_steps += 1
                     legal = env.get_legal_moves(*env.pacman_pos)
-                    curr_p = tuple(env.pacman_pos)
-                    curr_g = [tuple(g) for g in env.ghost_positions]
-                    s = encode_state(
-                        curr_p, curr_g, env.pellets, prev_p, prev_g, last_move=env.last_move,
-                        ghost_dirs=env.ghost_dirs, mode_step=env.mode_step,
-                        steps_without_pellet=steps_without_pellet,
-                        steps_remaining=max_steps - steps + 1, horizon=max_steps,
-                    )
+                    s = observe(env, steps_without_pellet, max_steps - steps + 1, max_steps)
 
                     # Epsilon-greedy action selection over the raw network
                     if rng.random() < epsilon:
@@ -526,35 +506,30 @@ def train_dqn(
                     r, _ = compute_reward(prev_move, m, ate, col, won, len(legal), steps_without_pellet)
                     ep_reward += r
 
-                    ns = encode_state(
-                        tuple(env.pacman_pos), [tuple(g) for g in env.ghost_positions], env.pellets, curr_p, curr_g,
-                        last_move=env.last_move, ghost_dirs=env.ghost_dirs, mode_step=env.mode_step,
-                        steps_without_pellet=steps_without_pellet,
-                        steps_remaining=max_steps - steps, horizon=max_steps,
-                    )
+                    ns = observe(env, steps_without_pellet, max_steps - steps, max_steps)
                     terminal = col or won or steps >= max_steps
                     next_legal = env.get_legal_moves(*env.pacman_pos)
                     next_mask = np.array([a in next_legal for a in ACTION_TO_IDX], dtype=np.bool_)
                     if not next_mask.any():
                         next_mask[:] = True
                     replay_buffer.push(s, ACTION_TO_IDX[m], r, ns, float(terminal), next_mask)
-                    prev_p, prev_g = curr_p, curr_g
 
                     # Sample batch & optimize
                     if len(replay_buffer) >= batch_size:
-                        b_s, b_a, b_r, b_ns, b_d, b_next_mask, indices, is_weights = replay_buffer.sample(batch_size, beta)
-                        curr_q = policy_net(b_s).gather(1, b_a)
+                        batch = replay_buffer.sample(batch_size, beta)
+                        curr_q = policy_net(batch["grids"], batch["scalars"]).gather(1, batch["actions"])
 
                         # Double DQN target computation
                         with torch.no_grad():
-                            best_next_actions = masked_next_actions(policy_net(b_ns), b_next_mask)
-                            next_target_q = target_net(b_ns).gather(1, best_next_actions)
-                            expected_q = b_r + gamma * next_target_q * (1.0 - b_d)
+                            next_q_online = policy_net(batch["next_grids"], batch["next_scalars"])
+                            best_next_actions = masked_next_actions(next_q_online, batch["next_action_masks"])
+                            next_target_q = target_net(batch["next_grids"], batch["next_scalars"]).gather(1, best_next_actions)
+                            expected_q = batch["rewards"] + gamma * next_target_q * (1.0 - batch["dones"])
 
                         td_errors = expected_q - curr_q
                         per_item_loss = nn.functional.smooth_l1_loss(curr_q, expected_q, reduction="none")
-                        loss = (is_weights * per_item_loss).mean()
-                        replay_buffer.update_priorities(indices, td_errors.detach().squeeze(1).cpu().numpy())
+                        loss = (batch["weights"] * per_item_loss).mean()
+                        replay_buffer.update_priorities(batch["indices"], td_errors.detach().squeeze(1).cpu().numpy())
                         ep_losses.append(loss.item())
 
                         optimizer.zero_grad()
@@ -665,8 +640,6 @@ if __name__ == "__main__":
     parser.add_argument("--batch-size", type=int, default=None, help="Batch size (default 64)")
     parser.add_argument("--seed", type=int, default=None, help="Global RNG seed (default 0)")
     parser.add_argument("--save-path", type=str, default=None, help="Path to save best model weights")
-    parser.add_argument("--arch", choices=ARCHITECTURES, default=None,
-                        help="Network: 'deep' full-resolution conv stack (default) or legacy 'pool'")
     parser.add_argument("--resume", action="store_true", help="Continue from the training-state checkpoint")
     parser.add_argument("--checkpoint-path", type=str, default=None,
                         help=f"Training-state file (default: <save-path dir>/{TRAINING_STATE_NAME})")
@@ -677,7 +650,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     hyper = {"episodes": args.episodes, "lr": args.lr, "batch_size": args.batch_size,
-             "seed": args.seed, "save_path": args.save_path, "arch": args.arch}
+             "seed": args.seed, "save_path": args.save_path}
     passed = {k: v for k, v in hyper.items() if v is not None}
     if args.resume and passed:
         parser.error(f"--resume uses the checkpoint's hyperparameters; drop {', '.join('--' + k.replace('_', '-') for k in passed)}")

@@ -85,19 +85,19 @@ In classical reinforcement learning, policy search methods (such as the Cross-En
 - **Unbounded Potential:** Because its representation capacity is vast and unconstrained by linear assumptions, extended training is expected to surpass handcrafted heuristics. Current progress is tracked in the training artifacts (`rl/weights/dqn_training_metrics.json`, `dqn_training_figures.svg`), not in this README.
 
 ### Phase 2 DQN Roadmap
-- [x] **Markov-Oriented State Encoding**: Separate current/history maps for each ghost, Pac-Man and ghost headings, scatter/chase phase, stall progress, and remaining episode horizon (30-channel encoder, see `dqn.md`).
+- [x] **Markov-Oriented State Encoding**: history-free `(grid, scalars)` observation — per-ghost maps, local Pac-Man and ghost headings, Scatter/Chase phase planes, stall and horizon scalars (see `dqn.md`).
 - [x] **Momentum Shaping & Anti-Orbit Memory**: reversal shaping in training plus optional inference anti-orbit heuristics.
 - [x] **Score-Aligned Objective**: reward proportional to the tournament score, long discount, stall penalty instead of a training-only stall cutoff, PER annealed over the episode schedule (see `dqn.md`).
-- [x] **Full-Resolution Network**: deeper 3x3 convolution stack without pooling (legacy pooled checkpoints still load).
+- [x] **Full-Resolution Network**: deeper 3x3 convolution stack without pooling; scalars enter at the dense layer.
 - [x] **Standardized Simulation Engine & Authentic Arcade Dynamics**: Unified single simulation engine (`core.environment.Environment`) across desktop Pygame, web arena, training, and tournaments with authentic Chase/Scatter cycling and seeded RNG.
 - [x] **Automated Training Diagnostics**: Per-episode metrics logging (JSON/CSV) and 4-panel visual figure generation (vector SVG and raster PNG).
 - [x] **Prioritized Experience Replay (PER)**: Replay transitions by TD-error priority with annealed importance-sampling correction.
-- [x] **Dueling DQN Architecture**: Separate state value $V(s)$ and action advantages $A(s, a)$; inference remains compatible with legacy checkpoints.
+- [x] **Dueling DQN Architecture**: Separate state value $V(s)$ and action advantages $A(s, a)$.
 - [ ] **Extended Training Run**: Longer runs with cosine learning-rate scheduling; compare best-checkpoint validation means against the feature-based agents on identical seeds before updating the shipped checkpoint.
 - [x] **Training Resume Support**: full training-state checkpoints (periodic, `--stop-after`, Ctrl+C) and exact `--resume` (see Quickstart).
 
 ### Open Issues
-- **Retrain all learned policies.** The collision rule was corrected (Pac-Man stepping onto a ghost's tile is a hit even if that ghost moves away). The shipped DQN checkpoint and the CEM / TD weights predate this, so their tournament scores are provisional until retrained and the tournament is regenerated. The DQN additionally has a new objective and network (see `dqn.md`); the shipped checkpoint is the legacy pooled model.
+- **Retrain all learned policies.** The collision rule was corrected (Pac-Man stepping onto a ghost's tile is a hit even if that ghost moves away). The shipped DQN checkpoint and the CEM / TD weights predate this, so their tournament scores are provisional until retrained and the tournament is regenerated. The shipped DQN checkpoint is only a short pipeline-check run on the current design (see `dqn.md`); a full run is still needed.
 - **Replay buffer structure.** Sampling still scans the whole buffer, and `next_state` is stored separately; a sum-tree and index-linked frame storage would cut both time and RAM.
 - **Repository hygiene.** Large binary/generated artifacts (`.pt`, metrics JSON/CSV, tournament results) are committed directly; consider Git LFS or release assets.
 
@@ -230,6 +230,7 @@ PacMan-AI-Chronicles/
 │
 ├── tests/                       # Automated Test Suite
 │   ├── test_agents.py           # Multi-agent decision verification test
+│   ├── test_dqn_encoding.py     # DQN observation layout and history-freedom
 │   ├── test_environment.py      # Scatter/Chase clock, collision rule, tunnel wrap
 │   ├── test_facades.py          # Root compatibility facades
 │   ├── test_train_resume.py     # Exact DQN stop/resume, Ctrl+C checkpoints

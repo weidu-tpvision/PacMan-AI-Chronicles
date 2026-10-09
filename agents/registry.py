@@ -51,7 +51,7 @@ def build_controllers(sys1_backend, model: str) -> List[dict]:
         dict(id="rl_opt", name="RL (Policy Optimized)", label="Graph-Aware RL", result="RL (Policy Optimized, CEM)",
              sub="Cross-Entropy policy optimization on topological features",
              color=(168, 85, 247), type_label="POLICY Q-VALUES", agent=TrainedQLearningAgent()),
-        dict(id="dqn", name="Deep Q-Network (DQN)", label="PyTorch CNN (30-ch encoder)", result="DQN (+inference heuristics)",
+        dict(id="dqn", name="Deep Q-Network (DQN)", label="PyTorch CNN (full-res dueling)", result="DQN (+inference heuristics)",
              sub="Dueling Double-DQN on raw spatial grid tensors (+ inference anti-orbit heuristics)",
              color=(236, 72, 153), type_label="DEEP Q-VALUES", agent=DQNAgent(heuristics=True)),
         dict(id="sys1", name=f"System 1 ({model})", label="Neural Zero-Shot", result=None,

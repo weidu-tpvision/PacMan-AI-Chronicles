@@ -6,7 +6,14 @@ Generates publication-quality 4-panel figures in both PNG and SVG formats.
 import json
 import math
 import os
+import sys
 from typing import Dict, List
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+from rl.dqn_model import NUM_CHANNELS, NUM_SCALARS
+
+ARCH_SUBTITLE = f"Architecture: {NUM_CHANNELS} grid planes + {NUM_SCALARS} scalars, full-resolution dueling Double DQN"
 
 try:
     import pygame
@@ -47,7 +54,7 @@ def generate_svg(metrics: List[Dict], output_svg_path: str):
         f'  .legend {{ font-size: 11px; font-weight: 500; }}',
         f'</style>',
         f'<text x="{margin}" y="35" class="title">Deep Q-Network (DQN) Pac-Man Training Diagnostics</text>',
-        f'<text x="{margin + 580}" y="35" class="subtitle">Architecture: 30-Channel Spatial Encoder, Dueling Double DQN</text>',
+        f'<text x="{margin + 580}" y="35" class="subtitle">{ARCH_SUBTITLE}</text>',
     ]
 
     def draw_panel(px, py, title, color):
@@ -167,7 +174,7 @@ def generate_png(metrics: List[Dict], output_png_path: str):
     font_lbl = pygame.font.SysFont("Arial", 11)
 
     t_img = font_title.render("Deep Q-Network (DQN) Pac-Man Training Diagnostics", True, (236, 240, 241))
-    s_img = font_sub.render("Architecture: 30-Channel Spatial Encoder, Dueling Double DQN", True, (149, 165, 166))
+    s_img = font_sub.render(ARCH_SUBTITLE, True, (149, 165, 166))
     surf.blit(t_img, (70, 15))
     surf.blit(s_img, (600, 20))
 

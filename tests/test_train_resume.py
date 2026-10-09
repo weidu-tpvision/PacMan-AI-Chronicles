@@ -84,31 +84,40 @@ class TestTrainResume(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             train_dqn(resume=True, checkpoint_path=os.path.join(self.tmp, "missing.pt"))
 
-    def test_agent_loads_deep_and_legacy_checkpoints(self):
+    def test_agent_loads_current_and_rejects_legacy_checkpoints(self):
         from agents.dqn_agent import DQNAgent
         from rl.dqn_model import PacmanDQN
-        from rl.train_dqn import DEFAULT_MODEL_PATH
 
-        deep_path = os.path.join(self.tmp, "deep.pt")
-        torch.save(PacmanDQN(arch="deep").state_dict(), deep_path)
-        for path, arch in ((deep_path, "deep"), (DEFAULT_MODEL_PATH, "pool")):
-            agent = DQNAgent(model_path=path, require_weights=True)
-            self.assertEqual(agent.arch, arch)
-            res = agent.decide((9, 15), [(9, 7), (7, 7), (11, 7)], {(1, 1)}, ["left", "right"])
-            self.assertIn(res.choice, ["left", "right"])
+        current = os.path.join(self.tmp, "current.pt")
+        torch.save(PacmanDQN().state_dict(), current)
+        agent = DQNAgent(model_path=current, require_weights=True)
+        res = agent.decide((9, 15), [(9, 7), (7, 7), (11, 7)], {(1, 1)}, ["left", "right"])
+        self.assertIn(res.choice, ["left", "right"])
+
+        legacy = os.path.join(self.tmp, "legacy.pt")  # old 30-channel pooled network layout
+        torch.save({"conv.0.weight": torch.zeros(32, 30, 3, 3), "conv.0.bias": torch.zeros(32)}, legacy)
+        with self.assertRaisesRegex(RuntimeError, "retrain"):
+            DQNAgent(model_path=legacy, require_weights=True)
+        fallback = DQNAgent(model_path=legacy)
+        self.assertFalse(fallback.model_loaded)
+        self.assertIn("[UNTRAINED]", fallback.name)
 
     def test_replay_buffer_state_round_trip(self):
         import numpy as np
         from rl.train_dqn import ReplayBuffer
 
+        def obs(i):
+            return np.full((1, 2, 2), i, np.float32), np.full(2, i / 10, np.float32)
+
         buf = ReplayBuffer(capacity=3)
         for i in range(5):  # wraps around the ring
-            buf.push(np.full((2, 2), i, np.float32), i % 4, float(i), np.full((2, 2), i + 1, np.float32), 0.0)
+            buf.push(obs(i), i % 4, float(i), obs(i + 1), 0.0)
         buf.update_priorities([0], [2.5])
         restored = ReplayBuffer(capacity=3)
         restored.load_state_dict(buf.state_dict())
         self.assertEqual((restored.size, restored.position, restored.max_priority), (buf.size, buf.position, buf.max_priority))
-        np.testing.assert_array_equal(restored.states, buf.states)
+        for name in ("grids", "scalars", "next_grids", "next_scalars"):
+            np.testing.assert_array_equal(getattr(restored, name), getattr(buf, name))
         np.testing.assert_array_equal(restored.priorities, buf.priorities)
         np.testing.assert_array_equal(restored.actions, buf.actions)
 
