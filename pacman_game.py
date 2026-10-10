@@ -191,6 +191,9 @@ class PacmanGame:
         self.lives = 3
         self.move_count = 0
         self.game_over = False
+        self.death_animating = False
+        self.pending_respawn = False
+        self.pending_game_over = False
         self.collision_flash = 0
         self.move_history.clear()
 
@@ -297,7 +300,35 @@ class PacmanGame:
             self.mouth_angle = 0.05
             self.mouth_dir = 1
 
-        if self.paused and not self.step_once:
+        if self.paused and not self.step_once and not self.death_animating:
+            return
+
+        if self.death_animating:
+            # Wait for Pac-Man and ghosts to visually complete their colliding step
+            pac_arrived = all(abs(self.pacman_visual[d] - float(self.pacman_pos[d])) <= 1e-3 for d in (0, 1))
+            ghosts_arrived = all(
+                all(abs(self.ghost_visuals[i][d] - float(self.ghost_positions[i][d])) <= 1e-3 for d in (0, 1))
+                for i in range(len(self.ghost_positions))
+            )
+            if pac_arrived and ghosts_arrived and self.collision_flash <= 0:
+                self.death_animating = False
+                if self.pending_game_over:
+                    self.pending_game_over = False
+                    self.game_over = True
+                    return
+                elif self.pending_respawn:
+                    self.pending_respawn = False
+                    self._invalidate_pending_decision()
+                    self.env.respawn()
+                    self.pacman_pos = list(self.env.pacman_pos)
+                    self.ghost_positions = [list(g) for g in self.env.ghost_positions]
+                    self.ghost_dirs = list(self.env.ghost_dirs)
+                    self.pacman_visual = [float(self.pacman_pos[0]), float(self.pacman_pos[1])]
+                    self.ghost_visuals = [[float(g[0]), float(g[1])] for g in self.ghost_positions]
+                    self._reset_agent(self.current_controller["agent"])
+                    self.banner_text = "Press Arrows or WASD to Move"
+                    self.banner_timer = 2.0
+                    return
             return
 
         # Ensure Pac-Man visual sprite has completed movement to destination tile
@@ -370,12 +401,14 @@ class PacmanGame:
 
     def _execute_step(self, chosen_move: str, decision: DecisionResult):
         """Execute a validated move on the environment and handle game events."""
+        old_pac = list(self.pacman_pos)
+        old_ghosts = [list(g) for g in self.ghost_positions]
         collided, ate, won = self.env.step(chosen_move)
 
         self.pacman_pos = list(self.env.pacman_pos)
         self.ghost_positions = [list(g) for g in self.env.ghost_positions]
         self.ghost_dirs = list(self.env.ghost_dirs)
-        legal_now = self.env.get_legal_moves(self.pacman_pos[0], self.pacman_pos[1])
+        legal_now = self.env.get_legal_moves(int(self.pacman_pos[0]), int(self.pacman_pos[1]))
         if chosen_move in legal_now:
             self.pacman_dir = chosen_move
         self.last_move = chosen_move
@@ -398,23 +431,29 @@ class PacmanGame:
         if collided:
             self.score += SCORE_DEATH
             self.lives -= 1
-            self.collision_flash = 20
+            self.collision_flash = 25
             self.human_started = False
+            self.death_animating = True
+
+            # If it was a head-on corridor swap, set visual meeting point to the midpoint
+            # so Pac-Man and ghost meet at the point of impact rather than passing through
+            for idx, (og, ng) in enumerate(zip(old_ghosts, self.ghost_positions)):
+                if (
+                    self.pacman_pos == og
+                    and ng == old_pac
+                    and abs(old_pac[0] - self.pacman_pos[0]) <= 1
+                    and abs(old_pac[1] - self.pacman_pos[1]) <= 1
+                ):
+                    mid_x = (old_pac[0] + self.pacman_pos[0]) / 2.0
+                    mid_y = (old_pac[1] + self.pacman_pos[1]) / 2.0
+                    self.pacman_pos = [mid_x, mid_y]
+                    self.ghost_positions[idx] = [mid_x, mid_y]
+                    break
+
             if self.lives <= 0:
-                self.game_over = True
+                self.pending_game_over = True
             else:
-                # Reset shared simulation state, including its Scatter/Chase clock.
-                self._invalidate_pending_decision()
-                self.env.respawn()
-                self.pacman_pos = list(self.env.pacman_pos)
-                self.ghost_positions = [list(g) for g in self.env.ghost_positions]
-                self.ghost_dirs = list(self.env.ghost_dirs)
-                self.pacman_visual = [float(self.pacman_pos[0]), float(self.pacman_pos[1])]
-                self.ghost_visuals = [[float(g[0]), float(g[1])] for g in self.ghost_positions]
-                # CRITICAL: reset agent temporal velocity tracking on respawn!
-                self._reset_agent(self.current_controller["agent"])
-                self.banner_text = "Press Arrows or WASD to Move"
-                self.banner_timer = 2.0
+                self.pending_respawn = True
 
         if self.step_once:
             self.step_once = False
