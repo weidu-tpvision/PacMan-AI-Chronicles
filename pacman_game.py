@@ -300,11 +300,15 @@ class PacmanGame:
         if self.paused and not self.step_once:
             return
 
-        if (
-            self.pacman_visual[0] != float(self.pacman_pos[0])
-            or self.pacman_visual[1] != float(self.pacman_pos[1])
-        ):
+        # Ensure Pac-Man visual sprite has completed movement to destination tile
+        if any(abs(self.pacman_visual[d] - float(self.pacman_pos[d])) > 1e-4 for d in (0, 1)):
             return
+
+        # Ensure ALL ghosts have completed visual movement to destination tiles
+        # (Defends against 60-step/sec runaway acceleration when Pac-Man is stationary against a wall)
+        for i in range(len(self.ghost_positions)):
+            if any(abs(self.ghost_visuals[i][d] - float(self.ghost_positions[i][d])) > 1e-4 for d in (0, 1)):
+                return
 
         # Handle Human Player direct manual control
         if self.current_controller.get("id") == "human":

@@ -491,8 +491,9 @@ window.addEventListener("keydown", async (e) => {
         await switchAgent(6);
       }
       humanBufferedMove = dir;
-      // Step immediately for ultra-responsive feel
-      await stepOnce(dir);
+      if (isPaused) {
+        await stepOnce(dir);
+      }
     }
   }
 });
