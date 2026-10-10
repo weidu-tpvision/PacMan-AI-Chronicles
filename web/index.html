@@ -237,6 +237,7 @@
         <button class="agent-btn" onclick="switchAgent(3)">[4] Greedy Heuristic</button>
         <button class="agent-btn" onclick="switchAgent(4)">[5] Q-Learning TD</button>
         <button class="agent-btn" onclick="switchAgent(5)">[6] Random Agent</button>
+        <button class="agent-btn" onclick="switchAgent(6)" style="grid-column: span 2;">[7] Manual (Human Player)</button>
       </div>
     </div>
 
@@ -262,7 +263,7 @@
 
     <!-- Controls hint -->
     <div class="controls-hint">
-      Hotkeys: <kbd>1-6</kbd> Switch AI &nbsp;|&nbsp; <kbd>Space</kbd> Pause/Resume &nbsp;|&nbsp; <kbd>S</kbd> Speed &nbsp;|&nbsp; <kbd>R</kbd> Reset Board
+      Hotkeys: <kbd>1-7</kbd> Switch AI/Human &nbsp;|&nbsp; <kbd>Arrows / WASD</kbd> Steer &nbsp;|&nbsp; <kbd>Space</kbd> Pause &nbsp;|&nbsp; <kbd>S</kbd> Speed &nbsp;|&nbsp; <kbd>R</kbd> Reset
     </div>
   </div>
 </div>
@@ -288,8 +289,17 @@ const EVENT_LABELS = {
   game_over: (_, score) => `GAME OVER - ${score} pts`,
 };
 
-async function stepOnce() {
-  const res = await fetch("/api/step", { method: "POST" });
+let currentAgentIdx = 1;
+let humanBufferedMove = null;
+
+async function stepOnce(manualMove = null) {
+  const moveToSend = manualMove || (currentAgentIdx === 6 ? humanBufferedMove : null);
+  const options = {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: moveToSend ? JSON.stringify({ move: moveToSend }) : "{}",
+  };
+  const res = await fetch("/api/step", options);
   const data = await res.json();
   if (data.event) {
     const [kind, arg] = data.event.split(":");
@@ -432,6 +442,7 @@ function render(data) {
 
 async function switchAgent(idx) {
   try {
+    currentAgentIdx = idx;
     const res = await fetch("/api/switch_agent", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -453,17 +464,36 @@ async function resetBoard() {
   await fetch("/api/reset", { method: "POST" });
 }
 
-window.addEventListener("keydown", (e) => {
-  if (e.key >= "1" && e.key <= "6") {
+window.addEventListener("keydown", async (e) => {
+  if (e.key >= "1" && e.key <= "7") {
     switchAgent(parseInt(e.key) - 1);
+  } else if (e.key === "h" || e.key === "H") {
+    switchAgent(6);
   } else if (e.code === "Space") {
     e.preventDefault();
     isPaused = !isPaused;
     updateStatusBadge();
-  } else if (e.key === "s" || e.key === "S") {
+  } else if ((e.key === "s" || e.key === "S") && currentAgentIdx !== 6) {
     speedIdx = (speedIdx + 1) % STEP_INTERVALS_MS.length;
   } else if (e.key === "r" || e.key === "R") {
     resetBoard();
+  } else {
+    // Arrow keys or WASD for manual gameplay
+    let dir = null;
+    if (e.key === "ArrowUp" || e.key === "w" || e.key === "W") dir = "up";
+    else if (e.key === "ArrowDown" || e.key === "s" || e.key === "S") dir = "down";
+    else if (e.key === "ArrowLeft" || e.key === "a" || e.key === "A") dir = "left";
+    else if (e.key === "ArrowRight" || e.key === "d" || e.key === "D") dir = "right";
+
+    if (dir) {
+      e.preventDefault();
+      if (currentAgentIdx !== 6) {
+        await switchAgent(6);
+      }
+      humanBufferedMove = dir;
+      // Step immediately for ultra-responsive feel
+      await stepOnce(dir);
+    }
   }
 });
 

@@ -44,6 +44,7 @@ What happens when you pit modern **Generative AI (Large Language Models)** again
 | **[4]** | **Greedy Heuristic** | *Symbolic / Expert Rules* | Hand-crafted priority rules balancing BFS food seeking and ghost evasion. | µs-scale |
 | **[5]** | **Textbook Q-Learning** | *Classical TD-Learning* | Bellman equation updates on classic linear feature approximations. | µs-scale |
 | **[6]** | **Random Baseline** | *Empirical Floor* | Uniform random distribution across legal corridors. | ~zero |
+| **[7]** / **[H]** | **Manual (Human Player)** | *Interactive Control* | Direct keyboard play (Arrows / WASD) with turn buffering, corridor inertia, and fixed real-time ghost pacing. | human reaction |
 
 ---
 
@@ -132,8 +133,11 @@ pip install -r requirements.txt
 python pacman_game.py
 ```
 
-- **Keys `[1] - [6]`:** Instantly swap the live AI controller in real-time.
+- **Keys `[1] - [7]` / `[H]`:** Swap active controller between AI paradigms (`[1]-[6]`) and Human Player (`[7]`).
+- **Arrows / WASD:** Directly steer Pac-Man with turn buffering and arcade corridor inertia. Pressing any movement key automatically takes over control.
 - **Spacebar:** Pause / Resume the game.
+- **`[R]`:** Reset board to initial state.
+- **`[S]`:** Cycle game speed (3x, 6x, 12x) during AI demonstration.
 - **Live HUD:** Shows real-time action probability distributions, decision confidence, and telemetry latency.
 
 ### 3. Run the Head-to-Head Tournament Benchmark
@@ -218,6 +222,7 @@ PacMan-AI-Chronicles/
 │   ├── greedy_agent.py          # Multi-objective heuristic planner
 │   ├── q_learning_agent.py      # Linear feature Q-learning agents
 │   ├── dqn_agent.py             # PyTorch CNN inference agent
+│   ├── human_agent.py           # Manual keyboard controller with turn buffering
 │   └── system_one_agent.py      # Ollama / Jev System 1 wrapper agent
 │
 ├── core/                        # Core Game Engine & Simulation

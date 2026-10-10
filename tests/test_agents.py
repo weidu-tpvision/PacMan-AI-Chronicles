@@ -10,6 +10,7 @@ import unittest
 from agents import (
     DQNAgent,
     GreedyHeuristicAgent,
+    HumanAgent,
     PretrainedQLearningAgent,
     RandomAgent,
     SystemOneBaselineAgent,
@@ -32,6 +33,7 @@ class TestAgentSuite(unittest.TestCase):
         self.dqn_agent = DQNAgent()
         self.sys1_backend = SystemOneAgent(prefer_live=False)
         self.sys1_agent = SystemOneBaselineAgent(self.sys1_backend)
+        self.human_agent = HumanAgent()
 
         self.agents = [
             self.random_agent,
@@ -40,6 +42,7 @@ class TestAgentSuite(unittest.TestCase):
             self.trained_q,
             self.dqn_agent,
             self.sys1_agent,
+            self.human_agent,
         ]
 
     def test_agent_protocol_attributes(self):
@@ -124,6 +127,34 @@ class TestAgentSuite(unittest.TestCase):
         dqn.decide((GRID_WIDTH - 1, 9), [(5, 7)], set(), ["left", "right"], "left", **ctx)
         again = dqn.decide(*state, **ctx)
         self.assertEqual(first.probabilities, again.probabilities)
+
+    def test_human_agent_buffering_and_continuation(self):
+        """Verify HumanAgent turn buffering, heading persistence, and reset."""
+        agent = HumanAgent()
+        legal = ["left", "right"]
+
+        # Default with no input and no last_move: legal move
+        res = agent.decide((9, 15), [], set(), legal)
+        self.assertIn(res.choice, legal)
+
+        # Buffer a legal direction
+        agent.set_desired_direction("right")
+        self.assertEqual(agent.get_intended_move(legal), "right")
+        res = agent.decide((9, 15), [], set(), legal)
+        self.assertEqual(res.choice, "right")
+
+        # Heading continues when desired direction is cleared
+        agent.set_desired_direction(None)
+        self.assertEqual(agent.get_intended_move(legal), "right")
+
+        # When corridor is blocked, returns None unless an alternative legal input is set
+        blocked_legal = ["up", "down"]
+        self.assertIsNone(agent.get_intended_move(blocked_legal))
+
+        # Reset clears buffers
+        agent.reset()
+        self.assertIsNone(agent.desired_direction)
+        self.assertIsNone(agent.current_heading)
 
 
 if __name__ == "__main__":

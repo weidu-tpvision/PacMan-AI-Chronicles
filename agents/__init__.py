@@ -9,6 +9,7 @@ from agents.q_learning_agent import (
     PretrainedQLearningAgent,
     TrainedQLearningAgent,
 )
+from agents.human_agent import HumanAgent
 from agents.random_agent import RandomAgent
 from agents.system_one_agent import SystemOneBaselineAgent
 
@@ -22,4 +23,5 @@ __all__ = [
     "TrainedQLearningAgent",
     "DQNAgent",
     "SystemOneBaselineAgent",
+    "HumanAgent",
 ]

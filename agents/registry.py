@@ -12,6 +12,7 @@ from typing import Dict, List, Optional
 
 from agents.dqn_agent import DQNAgent
 from agents.greedy_agent import GreedyHeuristicAgent
+from agents.human_agent import HumanAgent
 from agents.q_learning_agent import PretrainedQLearningAgent, TrainedQLearningAgent
 from agents.random_agent import RandomAgent
 from agents.system_one_agent import SystemOneBaselineAgent
@@ -66,6 +67,9 @@ def build_controllers(sys1_backend, model: str) -> List[dict]:
         dict(id="random", name="Random Agent", label="Noise Floor", result="Random Agent (Baseline)",
              sub="Uniform random distribution across legal corridors",
              color=(239, 68, 68), type_label="UNIFORM SELECTION", agent=RandomAgent()),
+        dict(id="human", name="Human Player", label="Manual Input", result=None,
+             sub="Steer with Arrow Keys or WASD (turn buffering enabled)",
+             color=(250, 204, 21), type_label="MANUAL INPUT", agent=HumanAgent()),
     ]
     controllers = []
     for s in specs:

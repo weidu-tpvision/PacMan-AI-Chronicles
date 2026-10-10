@@ -72,7 +72,7 @@ class PacmanGame:
         self.panel_width = 420
 
         self.screen_width = self.maze_width + self.panel_width
-        self.screen_height = max(self.maze_height, 640)
+        self.screen_height = max(self.maze_height, 660)
         self.screen = pygame.display.set_mode((self.screen_width, self.screen_height))
         self.clock = pygame.time.Clock()
 
@@ -90,8 +90,9 @@ class PacmanGame:
             prefer_live=(not force_mock),
         )
 
-        # Register all 6 controllers in clean 1-6 order (shared with web_arena.py)
+        # Register all controllers (AI paradigms + Human Player)
         self.controllers = build_controllers(self.sys1_backend, model)
+        self.human_idx = next((i for i, c in enumerate(self.controllers) if c.get("id") == "human"), 6)
 
         self.active_idx = initial_agent_idx % len(self.controllers)
 
@@ -131,8 +132,22 @@ class PacmanGame:
             self.active_idx = idx
             c = self.current_controller
             self._reset_agent(c["agent"])
-            self.banner_text = f"Switched AI: {c['name']}"
+            if c.get("id") == "human":
+                self.banner_text = "Manual Mode: Use Arrows or WASD"
+            else:
+                self.banner_text = f"Switched AI: {c['name']}"
             self.banner_timer = 2.0
+
+    def handle_human_input(self, direction: str):
+        """Queue a movement direction for the human player, auto-selecting Human mode if needed."""
+        if self.current_controller.get("id") != "human":
+            self.set_controller(self.human_idx)
+            self.banner_text = "Switched to Manual Control (Arrows/WASD)"
+            self.banner_timer = 2.0
+        self.human_started = True
+        agent = self.current_controller["agent"]
+        if hasattr(agent, "set_desired_direction"):
+            agent.set_desired_direction(direction)
 
     def _invalidate_pending_decision(self):
         """Discard any decision computed for the previous agent or game state."""
@@ -182,6 +197,7 @@ class PacmanGame:
     def _load_board(self, env: Environment):
         """Point the visual state at a fresh board (new game or next level)."""
         self.env = env
+        self.human_started = False
         self.pacman_pos = list(self.env.pacman_pos)
         self.pacman_visual = [float(self.pacman_pos[0]), float(self.pacman_pos[1])]
         self.pacman_dir = "left"
@@ -290,6 +306,48 @@ class PacmanGame:
         ):
             return
 
+        # Handle Human Player direct manual control
+        if self.current_controller.get("id") == "human":
+            human_agent = self.current_controller["agent"]
+            legal = self.get_legal_moves(self.pacman_pos[0], self.pacman_pos[1])
+
+            # Check continuously held arrow / WASD keys
+            keys = pygame.key.get_pressed()
+            if keys[pygame.K_UP] or keys[pygame.K_w]:
+                human_agent.set_desired_direction("up")
+                self.human_started = True
+            elif keys[pygame.K_DOWN] or keys[pygame.K_s]:
+                human_agent.set_desired_direction("down")
+                self.human_started = True
+            elif keys[pygame.K_LEFT] or keys[pygame.K_a]:
+                human_agent.set_desired_direction("left")
+                self.human_started = True
+            elif keys[pygame.K_RIGHT] or keys[pygame.K_d]:
+                human_agent.set_desired_direction("right")
+                self.human_started = True
+
+            if not self.human_started:
+                # Waiting for player to take their first action at round start / respawn
+                if self.active_decision is None or self.active_decision.choice != "READY":
+                    self.active_decision = DecisionResult(
+                        choice="READY",
+                        probabilities={d: 0.0 for d in ("up", "down", "left", "right")},
+                        confidence=0.0,
+                        latency_ms=0.0,
+                    )
+                return
+
+            decision = human_agent.decide(
+                tuple(self.pacman_pos),
+                [tuple(g) for g in self.ghost_positions],
+                self.pellets,
+                legal,
+                self.last_move,
+            )
+            self.active_decision = decision
+            self._execute_step(decision.choice, decision)
+            return
+
         with self.decision_lock:
             if self.latest_decision_result is not None:
                 decision = self.latest_decision_result
@@ -299,54 +357,64 @@ class PacmanGame:
                 chosen_move = decision.choice
                 legal = self.env.get_legal_moves(self.pacman_pos[0], self.pacman_pos[1])
                 if chosen_move in legal:
-                    collided, ate, won = self.env.step(chosen_move)
-
-                    self.pacman_pos = list(self.env.pacman_pos)
-                    self.ghost_positions = [list(g) for g in self.env.ghost_positions]
-                    self.ghost_dirs = list(self.env.ghost_dirs)
-                    self.pacman_dir = chosen_move
-                    self.last_move = chosen_move
-                    self.move_count += 1
-                    self.move_history.append((self.move_count, chosen_move, decision.confidence, decision.latency_ms))
-
-                    if ate:
-                        self.score += SCORE_PELLET
-                    if won:
-                        # Same rule as web_arena.py: keep score & lives, advance to a fresh board
-                        self.score += SCORE_WIN
-                        self.level += 1
-                        self._invalidate_pending_decision()
-                        self._load_board(Environment())
-                        self._reset_agent(self.current_controller["agent"])
-                        self.banner_text = f"Level cleared! Now on level {self.level}"
-                        self.banner_timer = 2.5
-
-                    if collided:
-                        self.score += SCORE_DEATH
-                        self.lives -= 1
-                        self.collision_flash = 20
-                        if self.lives <= 0:
-                            self.game_over = True
-                        else:
-                            # Reset shared simulation state, including its Scatter/Chase clock.
-                            self._invalidate_pending_decision()
-                            self.env.respawn()
-                            self.pacman_pos = list(self.env.pacman_pos)
-                            self.ghost_positions = [list(g) for g in self.env.ghost_positions]
-                            self.ghost_dirs = list(self.env.ghost_dirs)
-                            self.pacman_visual = [float(self.pacman_pos[0]), float(self.pacman_pos[1])]
-                            self.ghost_visuals = [[float(g[0]), float(g[1])] for g in self.ghost_positions]
-                            # CRITICAL: reset agent temporal velocity tracking on respawn!
-                            self._reset_agent(self.current_controller["agent"])
-
-                    if self.step_once:
-                        self.step_once = False
-                        self.paused = True
+                    self._execute_step(chosen_move, decision)
                 return
 
         if not self.pending_decision:
             legal = self.get_legal_moves(self.pacman_pos[0], self.pacman_pos[1])
             self.start_decision_query(legal)
+
+    def _execute_step(self, chosen_move: str, decision: DecisionResult):
+        """Execute a validated move on the environment and handle game events."""
+        collided, ate, won = self.env.step(chosen_move)
+
+        self.pacman_pos = list(self.env.pacman_pos)
+        self.ghost_positions = [list(g) for g in self.env.ghost_positions]
+        self.ghost_dirs = list(self.env.ghost_dirs)
+        legal_now = self.env.get_legal_moves(self.pacman_pos[0], self.pacman_pos[1])
+        if chosen_move in legal_now:
+            self.pacman_dir = chosen_move
+        self.last_move = chosen_move
+        self.move_count += 1
+        self.move_history.append((self.move_count, chosen_move, decision.confidence, decision.latency_ms))
+
+        if ate:
+            self.score += SCORE_PELLET
+        if won:
+            # Same rule as web_arena.py: keep score & lives, advance to a fresh board
+            self.score += SCORE_WIN
+            self.level += 1
+            self.human_started = False
+            self._invalidate_pending_decision()
+            self._load_board(Environment())
+            self._reset_agent(self.current_controller["agent"])
+            self.banner_text = f"Level cleared! Now on level {self.level}"
+            self.banner_timer = 2.5
+
+        if collided:
+            self.score += SCORE_DEATH
+            self.lives -= 1
+            self.collision_flash = 20
+            self.human_started = False
+            if self.lives <= 0:
+                self.game_over = True
+            else:
+                # Reset shared simulation state, including its Scatter/Chase clock.
+                self._invalidate_pending_decision()
+                self.env.respawn()
+                self.pacman_pos = list(self.env.pacman_pos)
+                self.ghost_positions = [list(g) for g in self.env.ghost_positions]
+                self.ghost_dirs = list(self.env.ghost_dirs)
+                self.pacman_visual = [float(self.pacman_pos[0]), float(self.pacman_pos[1])]
+                self.ghost_visuals = [[float(g[0]), float(g[1])] for g in self.ghost_positions]
+                # CRITICAL: reset agent temporal velocity tracking on respawn!
+                self._reset_agent(self.current_controller["agent"])
+                self.banner_text = "Press Arrows or WASD to Move"
+                self.banner_timer = 2.0
+
+        if self.step_once:
+            self.step_once = False
+            self.paused = True
 
     def draw_maze(self):
         maze_rect = pygame.Rect(0, 0, self.maze_width, self.screen_height)
@@ -575,12 +643,12 @@ class PacmanGame:
 
         # Controller Quick-Select Menu Card
         self.screen.blit(
-            self.font_bold.render("AVAILABLE CONTROLLERS (Press [1-6] or [TAB])", True, COLOR_TEXT_PRIMARY),
+            self.font_bold.render("AVAILABLE CONTROLLERS (Press [1-7], [H], or [TAB])", True, COLOR_TEXT_PRIMARY),
             (panel_x + pad, y),
         )
         y += 20
 
-        menu_card = pygame.Rect(panel_x + pad, y, self.panel_width - pad * 2, 118)
+        menu_card = pygame.Rect(panel_x + pad, y, self.panel_width - pad * 2, 136)
         pygame.draw.rect(self.screen, COLOR_BG, menu_card, border_radius=6)
         pygame.draw.rect(self.screen, COLOR_PANEL_BORDER, menu_card, width=1, border_radius=6)
 
@@ -593,7 +661,7 @@ class PacmanGame:
             self.screen.blit(self.font_mono.render(line_str, True, text_color), (panel_x + pad + 8, m_y))
             m_y += 18
 
-        y += 128
+        y += 146
 
         # Game Stats
         self.screen.blit(
@@ -618,7 +686,7 @@ class PacmanGame:
         y += 26
 
         # Controls Hint
-        controls_str = "[SPACE] Pause/Step  |  [R] Reset  |  [S] Speed"
+        controls_str = "[Arrows/WASD] Steer  |  [SPACE] Pause  |  [R] Reset  |  [S] Speed"
         self.screen.blit(self.font_small.render(controls_str, True, COLOR_TEXT_MUTED), (panel_x + pad, y))
 
         if self.game_over:
@@ -647,7 +715,7 @@ class PacmanGame:
                             self.paused = True
                     elif event.key == pygame.K_TAB:
                         self.set_controller(self.active_idx + 1)
-                    # Clean 1-6 keys for the 6 controllers
+                    # Clean 1-6 keys for the AI controllers, 7 / 0 / H for Human Player
                     elif event.key == pygame.K_1:
                         self.set_controller(0)  # RL (Policy Optimized)
                     elif event.key == pygame.K_2:
@@ -660,8 +728,22 @@ class PacmanGame:
                         self.set_controller(4)  # Q-Learning (Textbook)
                     elif event.key == pygame.K_6:
                         self.set_controller(5)  # Random Agent
-                    elif event.key == pygame.K_s:
-                        # Cycle speed: 3.0 -> 6.0 -> 12.0 -> 3.0
+                    elif event.key in (pygame.K_7, pygame.K_0, pygame.K_h, pygame.K_p):
+                        self.set_controller(self.human_idx)  # Human Player
+                    # Manual Player Steering (Arrows & WASD)
+                    elif event.key in (pygame.K_UP, pygame.K_w):
+                        self.handle_human_input("up")
+                    elif event.key in (pygame.K_DOWN, pygame.K_s):
+                        self.handle_human_input("down")
+                    elif event.key in (pygame.K_LEFT, pygame.K_a):
+                        self.handle_human_input("left")
+                    elif event.key in (pygame.K_RIGHT, pygame.K_d):
+                        self.handle_human_input("right")
+                    elif event.key == pygame.K_s and pygame.key.get_mods() & pygame.KMOD_CTRL:
+                        # Allow Ctrl+S for speed toggle if desired
+                        pass
+                    elif event.key == pygame.K_s and not (self.current_controller.get("id") == "human"):
+                        # S key cycles speed only when NOT in human mode (so S steers down in human mode)
                         cur_idx = self.speed_levels.index(self.move_speed) if self.move_speed in self.speed_levels else 1
                         self.move_speed = self.speed_levels[(cur_idx + 1) % len(self.speed_levels)]
                         self.banner_text = f"Speed: {self.move_speed:.0f}x"
@@ -691,7 +773,7 @@ def main():
         "--agent",
         type=int,
         default=0,
-        help="Initial active agent index (0: RL Optimized, 1: DQN, 2: System 1, 3: Greedy, 4: Q-Textbook, 5: Random)",
+        help="Initial active agent index (0: RL Optimized, 1: DQN, 2: System 1, 3: Greedy, 4: Q-Textbook, 5: Random, 6: Human)",
     )
     args = parser.parse_args()
 

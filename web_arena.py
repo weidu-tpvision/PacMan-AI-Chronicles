@@ -61,10 +61,20 @@ class GameSession:
             "probabilities": {"up": 0.25, "down": 0.25, "left": 0.25, "right": 0.25},
         }
 
-    def step(self):
+    def step(self, move: Optional[str] = None):
         self.last_event = None
         legal = self.env.get_legal_moves(*self.env.pacman_pos)
         agent = self.current_agent
+
+        if hasattr(agent, "set_desired_direction") and move:
+            agent.set_desired_direction(move)
+            self.human_started = True
+
+        if hasattr(agent, "get_intended_move"):
+            if not getattr(self, "human_started", False):
+                # Player waiting for first directional input at start or respawn
+                return self.get_state(include_walls=False)
+
         args = (
             tuple(self.env.pacman_pos), [tuple(g) for g in self.env.ghost_positions],
             self.env.pellets, legal, self.env.last_move,
@@ -88,6 +98,7 @@ class GameSession:
         if col:
             self.score += SCORE_DEATH
             self.lives -= 1
+            self.human_started = False
             if self.lives <= 0:
                 self.last_event = f"game_over:{self.score}"
                 final_event = self.last_event
@@ -101,6 +112,7 @@ class GameSession:
             # Keep score & lives, advance to a fresh board (win bonus stays visible)
             self.score += SCORE_WIN
             self.level += 1
+            self.human_started = False
             self.last_event = "level_cleared"
             self.env = Environment()
             self.current_agent.reset()
@@ -175,8 +187,19 @@ class ArenaHandler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         try:
             if self.path == "/api/step":
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                move = None
+                if length > 0:
+                    if length > MAX_BODY_BYTES:
+                        self._send_json({"error": "body too large"}, 413)
+                        return
+                    try:
+                        body = json.loads(self.rfile.read(length) or b"{}")
+                        move = body.get("move")
+                    except Exception:
+                        move = None
                 with session_lock:
-                    state = session.step()
+                    state = session.step(move=move)
                 self._send_json(state)
             elif self.path == "/api/switch_agent":
                 length = int(self.headers.get("Content-Length", 0) or 0)
@@ -222,7 +245,7 @@ def main():
     print(f" * Local Server URL:  {url}  (bound to {args.bind})")
     print(f" * Active AI Model:   {session.controllers[session.active_idx]['name']}")
     print("------------------------------------------------------------------------------------------")
-    print("     Keys: [1]-[6] Switch AI | [Space] Pause | [R] Reset | [Ctrl+C] to stop")
+    print("     Keys: [1]-[7] Switch AI/Human | [Arrows/WASD] Steer | [Space] Pause | [R] Reset")
     print("==========================================================================================\n", flush=True)
 
     if not args.no_browser:

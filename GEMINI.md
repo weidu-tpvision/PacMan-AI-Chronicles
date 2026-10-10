@@ -46,6 +46,7 @@ system_one/
 │   ├── greedy_agent.py          # Hand-crafted multi-objective heuristic planner
 │   ├── q_learning_agent.py      # Linear feature Q-learning agents (Textbook & Trained)
 │   ├── dqn_agent.py             # PyTorch ConvNet inference agent with temporal position tracking
+│   ├── human_agent.py           # Manual keyboard controller with turn buffering & continuous pacing
 │   ├── system_one_agent.py      # LLM / Ollama wrapper agent
 │   └── __init__.py              # Agent registry exports
 │
@@ -80,7 +81,7 @@ system_one/
 │   ├── test_system_one.py       # Schema and fallback verification
 │   └── test_review_regressions.py # Regression coverage for previously fixed bugs
 │
-├── pacman_game.py               # Interactive visual Pygame arena (Live hot-swapping [1]-[6])
+├── pacman_game.py               # Interactive visual Pygame arena (Live hot-swapping [1]-[7] & manual play)
 ├── compare_baselines.py         # Multi-agent tournament benchmark runner
 ├── benchmark.py                 # Latency / throughput profiler
 ├── web_arena.py                 # Zero-dependency browser visualizer (HTML5/Canvas)
