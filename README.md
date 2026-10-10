@@ -134,10 +134,11 @@ python pacman_game.py
 ```
 
 - **Keys `[1] - [7]` / `[H]`:** Swap active controller between AI paradigms (`[1]-[6]`) and Human Player (`[7]`).
-- **Arrows / WASD:** Directly steer Pac-Man with turn buffering and arcade corridor inertia. Pressing any movement key automatically takes over control.
+- **Arrows / WASD:** Directly steer Pac-Man with turn buffering, corridor inertia, and synchronized real-time ghost pacing. Pressing any movement key automatically takes over control.
 - **Spacebar:** Pause / Resume the game.
 - **`[R]`:** Reset board to initial state.
 - **`[S]`:** Cycle game speed (3x, 6x, 12x) during AI demonstration.
+- **Visual Pacing & Impact Animation:** Steps synchronize on ghost visual arrival so ghosts never runaway-accelerate when a player halts against walls; on death, sprites visually meet at the point of impact before triggering Game Over or respawn.
 - **Live HUD:** Shows real-time action probability distributions, decision confidence, and telemetry latency.
 
 ### 3. Run the Head-to-Head Tournament Benchmark

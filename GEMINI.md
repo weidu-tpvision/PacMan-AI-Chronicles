@@ -142,6 +142,7 @@ Every DQN training run must follow this standardized automated diagnostic workfl
 * **Arcade Scatter / Chase Dynamics**: Ghosts cycle between Chase Mode (`CHASE_STEPS`: direct pursuit, ambush, flanking) and Scatter Mode (`SCATTER_STEPS`: heading to designated home corners), faithfully replicating Namco 1980 arcade behavior and naturally shattering static phase-locked stalemates.
 * **Seeded Reproducibility**: Each environment instance uses an isolated `self.rng = random.Random(seed)` with subtle ($10\%$) junction exploration noise, guaranteeing that tournament benchmarks evaluate diverse, realistic game trajectories across seeds while remaining fully reproducible.
 * **Episodic & Life-Loss Reset**: When Pac-Man loses a life or resets, calling `agent.reset()` immediately purges temporal velocity buffers, preventing corrupted post-respawn momentum vectors.
+* **Visual Synchronization & Contact Presentation**: Visual arenas enforce multi-actor transit barriers (`max(pacman_transit, ghost_transit)`) to lock simulation steps to arcade cadence even when a player is stationary against walls. On collision, sprites animate to the exact point of impact (including corridor midpoints on head-on swaps) and display a contact flash before transitioning to respawn or Game Over, guaranteeing clear visual contact without modifying headless MDP dynamics.
 
 ## 🐍 Python Virtual Environment & Runtime Setup
 
