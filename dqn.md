@@ -83,6 +83,10 @@ The discount's effective horizon, `1 / (1 − γ)`, must cover the span over whi
 - **Huber loss**, gradient-norm clipping, periodic hard target sync, Adam with cosine learning-rate annealing.
 - **Exploration:** epsilon-greedy, decaying exponentially from `epsilon_start` to `epsilon_min` over `epsilon_decay_fraction` of the planned episodes. A fixed per-episode decay factor would tie the exploration profile to one run length (short runs would end mostly random, long runs would sit at the floor), and the schedule is a pure function of the episode count, so resuming stays exact.
 - **Replay storage:** preallocated ring arrays (fp16 grids, fp32 scalars); full training-state checkpoints for `--resume` (see README).
+- **Update cadence:** one gradient update every `train_every` environment steps (gated on the checkpointed global step counter, so resume stays exact). The replay ratio is `batch_size / train_every`. On CPU the per-sample update cost is roughly flat in batch size, so a larger batch alone saves nothing; only fewer samples per step (larger `train_every` relative to `batch_size`) does, and that changes learning.
+- **PER sampling** is inverse-CDF sampling on float64 cumulative priorities (`np.searchsorted`), using one draw from the trainer RNG per sample, the same algorithm as `random.choices` without its per-call Python loop over the whole buffer. Sampling is still O(N) per batch; a sum-tree is the next step if it shows up in profiles again.
+- **CPU threads:** training pins torch intra-op threads (`--threads`, default 3/4 of logical CPUs); all logical CPUs oversubscribe this narrow network. Thread count is a runtime setting, not part of the checkpointed config.
+- **Rejected speedups:** running the online network on `s` and `s'` as one concatenated batch is *slower* (backward then runs over the doubled batch); `channels_last` memory format gave no gain on CPU.
 
 ## 5. Comparison with the Atari DQN
 [*Playing Atari with Deep Reinforcement Learning*](https://arxiv.org/abs/1312.5602) learned from preprocessed grayscale frames stacked four deep so a feed-forward network could infer motion.

@@ -172,7 +172,9 @@ python rl/train_dqn.py --stop-after 300   # train in sessions: run 300 episodes,
 python rl/train_dqn.py --resume           # continue where the last session (or Ctrl+C) stopped
 ```
 
-- `--resume` reuses the checkpoint's hyperparameters, so passing `--episodes`, `--lr`, etc. alongside it is rejected.
+- `--resume` reuses the checkpoint's hyperparameters, so passing `--episodes`, `--lr`, `--train-every`, etc. alongside it is rejected. Runtime options (`--threads`, `--stop-after`, `--checkpoint-every`, `--no-plots`, `--final-val-episodes`) may still be given.
+- `--threads` sets torch's CPU threads (default: 3/4 of logical CPUs). Using every logical CPU oversubscribes this small network and makes each gradient update several times slower.
+- `--train-every N` runs one gradient update every N environment steps (default 1). Larger N trains faster in wall-clock time but lowers the replay ratio (`batch-size / N` samples per step), so it is a learning hyperparameter, not a free speedup.
 - Resuming from a periodic or `--stop-after` checkpoint reproduces the uninterrupted run exactly. A Ctrl+C checkpoint also keeps the interrupted episode's partial experience, so the result can differ slightly.
 - The state file holds the whole replay buffer (up to roughly 2 GB). It is git-ignored and deleted automatically once the run completes; `dqn_pacman.pt` (best validated model) is what the agents load.
 - For a run trained with a custom `--save-path`, pass the state file explicitly: `--resume --checkpoint-path <dir>/dqn_training_state.pt`.

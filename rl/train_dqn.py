@@ -50,7 +50,15 @@ from rl.dqn_model import ACTION_TO_IDX, NUM_CHANNELS, NUM_SCALARS, STALL_STEPS, 
 DEFAULT_WEIGHTS_DIR = os.path.join(os.path.dirname(__file__), "weights")
 DEFAULT_MODEL_PATH = os.path.join(DEFAULT_WEIGHTS_DIR, "dqn_pacman.pt")
 TRAINING_STATE_NAME = "dqn_training_state.pt"
-TRAINING_STATE_VERSION = 4  # v4: run-length-relative epsilon schedule
+TRAINING_STATE_VERSION = 5  # v5: train_every (gradient update every k environment steps)
+
+
+def default_num_threads() -> int:
+    """Intra-op torch threads for training. All logical CPUs oversubscribes this small
+    network (measured: 16 threads was 2.5-4x slower per update than 12 on a 16-CPU
+    machine), so default to three quarters of them."""
+    return max(1, (os.cpu_count() or 1) * 3 // 4)
+
 
 # Reward: the evaluation score (SCORE_* in core.environment) scaled to a small range,
 # so the agent optimizes exactly what the tournament measures, plus two small shaping
@@ -166,10 +174,15 @@ class ReplayBuffer:
         self.size = min(self.size + 1, self.capacity)
 
     def sample(self, batch_size: int, beta: float = 0.4) -> dict:
-        priorities = self.priorities[:self.size]
+        priorities = self.priorities[:self.size].astype(np.float64)
         scaled = priorities ** self.alpha
         probabilities = scaled / scaled.sum()
-        indices = self.rng.choices(range(self.size), weights=probabilities, k=batch_size)
+        # Inverse-CDF sampling, as random.choices does (one rng.random() per draw, bisect
+        # right on the cumulative weights), vectorized: choices() walks all `size` weights
+        # in Python on every call, which dominated sampling at full capacity.
+        cumulative = np.cumsum(probabilities)
+        draws = np.array([self.rng.random() for _ in range(batch_size)]) * cumulative[-1]
+        indices = np.minimum(np.searchsorted(cumulative, draws, side="right"), self.size - 1)
         weights = (self.size * probabilities[indices]) ** (-beta)
         weights /= weights.max()
         return {
@@ -328,6 +341,7 @@ def train_dqn(
     epsilon_decay_fraction: float = 0.6,
     per_beta_start: float = 0.4,
     target_update_steps: int = 400,
+    train_every: int = 1,
     warmup_steps: int = 1000,
     max_steps: int = DEFAULT_MAX_STEPS,
     val_every: int = 50,
@@ -341,6 +355,7 @@ def train_dqn(
     resume: bool = False,
     stop_after: Optional[int] = None,
     final_val_episodes: int = 200,
+    num_threads: Optional[int] = None,
 ):
     """Train (or resume training) the DQN.
 
@@ -348,8 +363,13 @@ def train_dqn(
     rl/weights/dqn_training_state.pt) is written every `checkpoint_every` episodes, after
     `stop_after` episodes of this session, and on Ctrl+C. With `resume=True` the run
     continues from it using the *checkpointed* hyperparameters (the arguments above are
-    ignored except `checkpoint_path`, `stop_after`, `checkpoint_every`, `make_plots` and
-    `final_val_episodes`).
+    ignored except `checkpoint_path`, `stop_after`, `checkpoint_every`, `make_plots`,
+    `final_val_episodes` and `num_threads`).
+
+    One gradient update (on `batch_size` replayed transitions) runs every `train_every`
+    environment steps, so the replay ratio is batch_size / train_every samples per step.
+    `num_threads` sets torch's intra-op threads (default: default_num_threads()); it is a
+    runtime setting, not a hyperparameter.
 
     Exploration decays from `epsilon_start` to `epsilon_min` over `epsilon_decay_fraction`
     of `episodes`. When the run completes, the best checkpoint and the final weights are
@@ -375,17 +395,22 @@ def train_dqn(
         cfg = ckpt["config"]
         episodes, lr, batch_size, gamma = cfg["episodes"], cfg["lr"], cfg["batch_size"], cfg["gamma"]
         epsilon_start, epsilon_min, epsilon_decay_fraction = cfg["epsilon_start"], cfg["epsilon_min"], cfg["epsilon_decay_fraction"]
-        per_beta_start, target_update_steps = cfg["per_beta_start"], cfg["target_update_steps"]
+        per_beta_start, target_update_steps, train_every = cfg["per_beta_start"], cfg["target_update_steps"], cfg["train_every"]
         warmup_steps, max_steps, val_every, val_episodes = cfg["warmup_steps"], cfg["max_steps"], cfg["val_every"], cfg["val_episodes"]
         seed, save_path, buffer_capacity = cfg["seed"], cfg["save_path"], cfg["buffer_capacity"]
 
+    if train_every < 1:
+        raise ValueError(f"train_every must be >= 1, got {train_every}")
     config = {
         "episodes": episodes, "lr": lr, "batch_size": batch_size, "gamma": gamma,
         "epsilon_start": epsilon_start, "epsilon_min": epsilon_min, "epsilon_decay_fraction": epsilon_decay_fraction,
-        "per_beta_start": per_beta_start, "target_update_steps": target_update_steps,
+        "per_beta_start": per_beta_start, "target_update_steps": target_update_steps, "train_every": train_every,
         "warmup_steps": warmup_steps, "max_steps": max_steps, "val_every": val_every,
         "val_episodes": val_episodes, "seed": seed, "save_path": save_path, "buffer_capacity": buffer_capacity,
     }
+
+    num_threads = num_threads or default_num_threads()
+    torch.set_num_threads(num_threads)
 
     seed_everything(seed)
     rng = random.Random(seed)
@@ -473,8 +498,9 @@ def train_dqn(
             log_print("======================================================================")
             log_print(f" DEEP Q-NETWORK (DQN) TRAINING: {NUM_CHANNELS} grid planes + {NUM_SCALARS} scalars")
             log_print("======================================================================")
-            log_print(f"Device: {device} | Batch Size: {batch_size} | Learning Rate: {lr} | Gamma: {gamma} | Seed: {seed}")
-            log_print(f"Episodes: {episodes} | Horizon: {max_steps} | Target Sync: every {target_update_steps} steps")
+            log_print(f"Device: {device} ({num_threads} threads) | Batch Size: {batch_size} | Learning Rate: {lr} | Gamma: {gamma} | Seed: {seed}")
+            log_print(f"Episodes: {episodes} | Horizon: {max_steps} | Target Sync: every {target_update_steps} steps | "
+                      f"Update: every {train_every} step(s)")
             log_print(f"Validation: {val_episodes} VAL seeds every {val_every} episodes (pure greedy policy)")
             log_print(f"Training state: {os.path.relpath(checkpoint_path)} every {checkpoint_every} episodes\n")
             log_print(f"Warming up replay buffer with {warmup_steps:,} random-policy steps...")
@@ -550,8 +576,9 @@ def train_dqn(
                         next_mask[:] = True
                     replay_buffer.push(s, ACTION_TO_IDX[m], r, ns, float(terminal), next_mask)
 
-                    # Sample batch & optimize
-                    if len(replay_buffer) >= batch_size:
+                    # Sample batch & optimize (every train_every steps of the global,
+                    # checkpointed step counter, so resumed runs update at the same steps)
+                    if len(replay_buffer) >= batch_size and total_steps % train_every == 0:
                         batch = replay_buffer.sample(batch_size, beta)
                         curr_q = policy_net(batch["grids"], batch["scalars"]).gather(1, batch["actions"])
 
@@ -693,6 +720,8 @@ if __name__ == "__main__":
     parser.add_argument("--episodes", type=int, default=None, help="Number of training episodes (default 1200)")
     parser.add_argument("--lr", type=float, default=None, help="Learning rate (default 5e-4)")
     parser.add_argument("--batch-size", type=int, default=None, help="Batch size (default 64)")
+    parser.add_argument("--train-every", type=int, default=None,
+                        help="Gradient update every N environment steps (default 1)")
     parser.add_argument("--seed", type=int, default=None, help="Global RNG seed (default 0)")
     parser.add_argument("--save-path", type=str, default=None, help="Path to save best model weights")
     parser.add_argument("--resume", action="store_true", help="Continue from the training-state checkpoint")
@@ -704,16 +733,18 @@ if __name__ == "__main__":
     parser.add_argument("--no-plots", action="store_true", help="Skip figure generation at the end")
     parser.add_argument("--final-val-episodes", type=int, default=200,
                         help="Unseen VAL seeds for the final re-evaluation of best/final weights (0 = skip)")
+    parser.add_argument("--threads", type=int, default=None,
+                        help=f"Torch intra-op threads (default {default_num_threads()} = 3/4 of logical CPUs)")
     args = parser.parse_args()
 
     hyper = {"episodes": args.episodes, "lr": args.lr, "batch_size": args.batch_size,
-             "seed": args.seed, "save_path": args.save_path}
+             "train_every": args.train_every, "seed": args.seed, "save_path": args.save_path}
     passed = {k: v for k, v in hyper.items() if v is not None}
     if args.resume and passed:
         parser.error(f"--resume uses the checkpoint's hyperparameters; drop {', '.join('--' + k.replace('_', '-') for k in passed)}")
 
     common = dict(checkpoint_every=args.checkpoint_every, stop_after=args.stop_after, make_plots=not args.no_plots,
-                  final_val_episodes=args.final_val_episodes)
+                  final_val_episodes=args.final_val_episodes, num_threads=args.threads)
     if args.resume:
         train_dqn(resume=True, checkpoint_path=args.checkpoint_path
                   or default_training_state_path(), **common)

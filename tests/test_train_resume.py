@@ -146,6 +146,42 @@ class TestTrainResume(unittest.TestCase):
         np.testing.assert_array_equal(restored.priorities, buf.priorities)
         np.testing.assert_array_equal(restored.actions, buf.actions)
 
+    def test_vectorized_per_sampling_matches_random_choices(self):
+        import random
+
+        import numpy as np
+        from rl.train_dqn import ReplayBuffer
+
+        buf = ReplayBuffer(capacity=50, rng=random.Random(7))
+        for i in range(37):
+            buf.push((np.zeros((1, 2, 2), np.float32), np.zeros(2, np.float32)), i % 4, 0.0,
+                     (np.zeros((1, 2, 2), np.float32), np.zeros(2, np.float32)), 0.0)
+        buf.priorities[:37] = np.random.default_rng(0).uniform(0.01, 5.0, 37).astype(np.float32)
+        probabilities = buf.priorities[:37].astype(np.float64) ** buf.alpha
+        probabilities /= probabilities.sum()
+
+        reference_rng = random.Random(7)
+        for _ in range(20):
+            batch = buf.sample(16, beta=0.5)
+            expected = reference_rng.choices(range(37), weights=probabilities.tolist(), k=16)
+            self.assertEqual(list(batch["indices"]), expected)
+
+    def test_train_every_stop_and_resume_matches_uninterrupted_run(self):
+        cfg = dict(TINY, train_every=2)
+        _, model_a, _ = self._run_dir("te_a")
+        full = train_dqn(save_path=model_a, **cfg)
+
+        _, model_b, state_b = self._run_dir("te_b")
+        train_dqn(save_path=model_b, stop_after=2, **cfg)
+        self.assertEqual(torch.load(state_b, weights_only=True)["config"]["train_every"], 2)
+        resumed = train_dqn(resume=True, checkpoint_path=state_b, make_plots=False, final_val_episodes=2)
+        self.assertEqual(resumed["metrics"], full["metrics"])
+        self.assertEqual(resumed["final_eval"], full["final_eval"])
+
+    def test_train_every_must_be_positive(self):
+        with self.assertRaises(ValueError):
+            train_dqn(save_path=os.path.join(self.tmp, "x.pt"), train_every=0, **TINY)
+
 
 if __name__ == "__main__":
     unittest.main()
