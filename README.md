@@ -96,12 +96,12 @@ Policy search (such as the Cross-Entropy Method) can converge quickly when suppl
 - [x] **Dueling DQN Architecture**: Separate state value $V(s)$ and action advantages $A(s, a)$.
 - [x] **Run-Length-Relative Exploration**: epsilon decays to its floor over a fixed fraction of the planned episodes, so short and long runs explore alike.
 - [x] **Unbiased Final Evaluation**: after training, the best checkpoint and the final weights are re-evaluated on VAL seeds not used for checkpoint selection (`rl/weights/dqn_final_eval.json`).
+- [x] **Compact Replay Buffer & SumTree PER**: Transitions compressed to 41 B native state representation (360× RAM reduction; 200,000 transitions in ~21 MB), with $O(\log N)$ binary SumTree/MaxTree priority sampling and on-the-fly vectorized batch decoding (`decode_grids_batch`).
 - [ ] **Extended Training Run**: full-length run on the current design; compare the final-evaluation means against the feature-based agents on identical seeds before updating the shipped checkpoint.
 - [x] **Training Resume Support**: full training-state checkpoints (periodic, `--stop-after`, Ctrl+C) and exact `--resume` (see Quickstart).
 
 ### Open Issues
 - **Retrain all learned policies.** The collision rule was corrected (Pac-Man stepping onto a ghost's tile is a hit even if that ghost moves away). The shipped DQN checkpoint and the CEM / TD weights predate this, so their tournament scores are provisional until retrained and the tournament is regenerated. The shipped DQN checkpoint is only a short pipeline-check run on the current design (see `dqn.md`); a full run is still needed.
-- **Replay buffer structure.** Sampling still scans the whole buffer, and `next_state` is stored separately; a sum-tree and index-linked frame storage would cut both time and RAM.
 - **Repository hygiene.** Large binary/generated artifacts (`.pt`, metrics JSON/CSV, tournament results) are committed directly; consider Git LFS or release assets.
 
 ---

@@ -11,6 +11,12 @@ from rl.dqn_model import (
     NUM_SCALARS,
     PacmanDQN,
     encode_state,
+    CompactObservation,
+    pack_pellets,
+    decode_grids_batch,
+    PELLET_COORDS,
+    N_PELLETS,
+    N_PELLET_BYTES,
 )
 
 __all__ = [
@@ -21,4 +27,11 @@ __all__ = [
     "NUM_SCALARS",
     "PacmanDQN",
     "encode_state",
+    "CompactObservation",
+    "pack_pellets",
+    "decode_grids_batch",
+    "PELLET_COORDS",
+    "N_PELLETS",
+    "N_PELLET_BYTES",
 ]
+
