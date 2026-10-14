@@ -168,15 +168,20 @@ Default hyperparameters live in each script (`--help` lists the overridable ones
 DQN training writes a full training-state checkpoint (`rl/weights/dqn_training_state.pt`: networks, optimizer, LR schedule, replay buffer, exploration, counters, metrics and RNG streams) every `--checkpoint-every` episodes and when you press **Ctrl+C**.
 
 ```bash
-python rl/train_dqn.py --stop-after 300   # train in sessions: run 300 episodes, checkpoint, exit
-python rl/train_dqn.py --resume           # continue where the last session (or Ctrl+C) stopped
+python rl/train_dqn.py --total-steps 1000000 --target-tau 0.005   # step-based budget with Polyak soft updates
+python rl/train_dqn.py --stop-after 300                            # train in sessions: run 300 episodes, checkpoint, exit
+python rl/train_dqn.py --resume                                    # continue where the last session (or Ctrl+C) stopped
 ```
 
-- `--resume` reuses the checkpoint's hyperparameters, so passing `--episodes`, `--lr`, `--train-every`, etc. alongside it is rejected. Runtime options (`--threads`, `--stop-after`, `--checkpoint-every`, `--no-plots`, `--final-val-episodes`) may still be given.
+- `--total-steps N`: sets the total environment-step budget (default: 1,000,000 steps). Schedules for exploration ($\epsilon$), PER importance-sampling exponent ($\beta$), and cosine learning rate are pure functions of environment steps, preventing schedule distortion as episodes lengthen with agent proficiency. `--episodes` remains supported as an alternative.
+- `--target-tau TAU`: Polyak target network soft-update rate ($\theta_{\text{target}} \leftarrow (1-\tau)\theta_{\text{target}} + \tau\theta_{\text{policy}}$). Setting `--target-tau 0.005` smoothly tracks policy parameters each update; `--target-tau 0.0` (default) preserves periodic hard sync every `--target-update-steps` (default 400).
+- `--val-every-steps N`: validates the pure greedy policy on VAL seeds every N environment steps (default: 25,000 steps), evaluated at episode boundaries.
+- `--buffer-capacity N`: prioritized experience replay capacity (default: 80,000 transitions, ~3.0 GB fp16/fp32 RAM footprint).
+- `--train-every N`: runs one gradient update every N environment steps (default 1). Setting `--train-every 4 --batch-size 128` cuts gradient updates per environment step from 64 to 32 samples, nearly doubling CPU throughput (from ~26 to ~50 steps/s) while stabilizing TD variance.
+- `--resume` reuses the checkpoint's hyperparameters, so passing `--total-steps`, `--episodes`, `--lr`, `--train-every`, etc. alongside it is rejected. Runtime options (`--threads`, `--stop-after`, `--checkpoint-every`, `--no-plots`, `--final-val-episodes`) may still be given.
 - `--threads` sets torch's CPU threads (default: 3/4 of logical CPUs). Using every logical CPU oversubscribes this small network and makes each gradient update several times slower.
-- `--train-every N` runs one gradient update every N environment steps (default 1). Larger N trains faster in wall-clock time but lowers the replay ratio (`batch-size / N` samples per step), so it is a learning hyperparameter, not a free speedup.
 - Resuming from a periodic or `--stop-after` checkpoint reproduces the uninterrupted run exactly. A Ctrl+C checkpoint also keeps the interrupted episode's partial experience, so the result can differ slightly.
-- The state file holds the whole replay buffer (up to roughly 2 GB). It is git-ignored and deleted automatically once the run completes; `dqn_pacman.pt` (best validated model) is what the agents load.
+- The state file holds the whole replay buffer (up to roughly 2–3 GB). It is git-ignored and deleted automatically once the run completes; `dqn_pacman.pt` (best validated model) is what the agents load.
 - For a run trained with a custom `--save-path`, pass the state file explicitly: `--resume --checkpoint-path <dir>/dqn_training_state.pt`.
 
 ### 5. Run the Automated Test Suite

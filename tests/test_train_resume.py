@@ -182,6 +182,90 @@ class TestTrainResume(unittest.TestCase):
         with self.assertRaises(ValueError):
             train_dqn(save_path=os.path.join(self.tmp, "x.pt"), train_every=0, **TINY)
 
+    def test_beta_schedule_linear_annealing(self):
+        from rl.train_dqn import beta_schedule
+
+        self.assertAlmostEqual(beta_schedule(0, 1000, 0.4), 0.4)
+        self.assertAlmostEqual(beta_schedule(500, 1000, 0.4), 0.7)
+        self.assertAlmostEqual(beta_schedule(1000, 1000, 0.4), 1.0)
+        self.assertAlmostEqual(beta_schedule(1500, 1000, 0.4), 1.0)  # clamped at 1.0
+
+        betas = [beta_schedule(s, 1000, 0.4) for s in range(0, 1001, 100)]
+        self.assertTrue(all(a <= b for a, b in zip(betas, betas[1:])), "beta must not decrease")
+
+    def test_cosine_lr_annealing(self):
+        import math
+        from rl.train_dqn import cosine_lr
+
+        lr = 5e-4
+        final_ratio = 0.1
+        self.assertAlmostEqual(cosine_lr(0, 1000, lr, final_ratio), lr)
+        self.assertAlmostEqual(cosine_lr(1000, 1000, lr, final_ratio), lr * final_ratio)
+        self.assertAlmostEqual(cosine_lr(1500, 1000, lr, final_ratio), lr * final_ratio)
+
+        # Midpoint cosine value
+        expected_mid = lr * (final_ratio + (1.0 - final_ratio) * 0.5 * (1.0 + math.cos(math.pi * 0.5)))
+        self.assertAlmostEqual(cosine_lr(500, 1000, lr, final_ratio), expected_mid)
+
+        lrs = [cosine_lr(s, 1000, lr, final_ratio) for s in range(0, 1001, 100)]
+        self.assertTrue(all(a >= b for a, b in zip(lrs, lrs[1:])), "cosine lr must monotonically decrease")
+
+    def test_soft_update_polyak_averaging(self):
+        from rl.train_dqn import soft_update
+
+        linear_target = torch.nn.Linear(4, 2, bias=False)
+        linear_policy = torch.nn.Linear(4, 2, bias=False)
+
+        with torch.no_grad():
+            linear_target.weight.fill_(1.0)
+            linear_policy.weight.fill_(3.0)
+
+        # tau = 0.0 -> target unchanged
+        soft_update(linear_target, linear_policy, tau=0.0)
+        self.assertTrue(torch.allclose(linear_target.weight, torch.full((2, 4), 1.0)))
+
+        # tau = 0.5 -> target becomes 0.5 * 1.0 + 0.5 * 3.0 = 2.0
+        soft_update(linear_target, linear_policy, tau=0.5)
+        self.assertTrue(torch.allclose(linear_target.weight, torch.full((2, 4), 2.0)))
+
+        # tau = 1.0 -> target matches policy exactly
+        soft_update(linear_target, linear_policy, tau=1.0)
+        self.assertTrue(torch.allclose(linear_target.weight, torch.full((2, 4), 3.0)))
+
+    def test_step_based_budget_stop_and_resume_matches(self):
+        # Budget defined by total_steps rather than episodes
+        cfg = dict(
+            total_steps=50, max_steps=15, warmup_steps=20, batch_size=8,
+            val_every_steps=25, val_episodes=1, buffer_capacity=200,
+            target_tau=0.05, make_plots=False, final_val_episodes=2,
+        )
+        _, model_a, _ = self._run_dir("step_a")
+        full = train_dqn(save_path=model_a, **cfg)
+        self.assertTrue(full["completed"])
+        self.assertGreaterEqual(full["steps_done"], 50)
+
+        _, model_b, state_b = self._run_dir("step_b")
+        first = train_dqn(save_path=model_b, stop_after=2, **cfg)
+        self.assertFalse(first["completed"])
+        self.assertTrue(os.path.exists(state_b))
+
+        resumed = train_dqn(resume=True, checkpoint_path=state_b, make_plots=False, final_val_episodes=2)
+        self.assertTrue(resumed["completed"])
+        self.assertEqual(resumed["steps_done"], full["steps_done"])
+        self.assertEqual(resumed["metrics"], full["metrics"])
+        self.assertEqual(resumed["final_eval"], full["final_eval"])
+
+    def test_invalid_parameters_raise_value_errors(self):
+        with self.assertRaises(ValueError):
+            train_dqn(save_path=os.path.join(self.tmp, "x.pt"), total_steps=0, **TINY)
+        with self.assertRaises(ValueError):
+            train_dqn(save_path=os.path.join(self.tmp, "x.pt"), target_tau=-0.1, **TINY)
+        with self.assertRaises(ValueError):
+            train_dqn(save_path=os.path.join(self.tmp, "x.pt"), target_tau=1.5, **TINY)
+        with self.assertRaises(ValueError):
+            train_dqn(save_path=os.path.join(self.tmp, "x.pt"), val_every_steps=0, **TINY)
+
 
 if __name__ == "__main__":
     unittest.main()
+
