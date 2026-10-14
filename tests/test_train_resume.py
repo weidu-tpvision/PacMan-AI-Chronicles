@@ -264,8 +264,99 @@ class TestTrainResume(unittest.TestCase):
             train_dqn(save_path=os.path.join(self.tmp, "x.pt"), target_tau=1.5, **TINY)
         with self.assertRaises(ValueError):
             train_dqn(save_path=os.path.join(self.tmp, "x.pt"), val_every_steps=0, **TINY)
+        with self.assertRaises(ValueError):
+            train_dqn(save_path=os.path.join(self.tmp, "x.pt"), n_step=0, **TINY)
+
+    def test_n_step_buffer_accumulation_and_flush(self):
+        from rl.train_dqn import NStepBuffer
+        import numpy as np
+
+        nb = NStepBuffer(n=3, gamma=0.9)
+        dummy_mask = np.ones(4, dtype=bool)
+
+        # Step 0: return None (len=1 < 3)
+        tr0 = nb.add("s0", 0, 1.0, "s1", False, dummy_mask)
+        self.assertIsNone(tr0)
+
+        # Step 1: return None (len=2 < 3)
+        tr1 = nb.add("s1", 1, 2.0, "s2", False, dummy_mask)
+        self.assertIsNone(tr1)
+
+        # Step 2: return 3-step transition for s0 (1.0 + 0.9*2.0 + 0.9^2*3.0 = 5.23)
+        tr2 = nb.add("s2", 2, 3.0, "s3", False, dummy_mask)
+        self.assertIsNotNone(tr2)
+        s, a, r, ns, d, m = tr2
+        self.assertEqual(s, "s0")
+        self.assertEqual(a, 0)
+        self.assertAlmostEqual(r, 1.0 + 0.9 * 2.0 + 0.81 * 3.0)  # 5.23
+        self.assertEqual(ns, "s3")
+        self.assertEqual(d, 0.0)
+
+        # Step 3 (terminal death): return 3-step transition for s1 (2.0 + 0.9*3.0 + 0.81*4.0 = 7.94)
+        tr3 = nb.add("s3", 3, 4.0, "s4", True, dummy_mask)
+        self.assertIsNotNone(tr3)
+        s, a, r, ns, d, m = tr3
+        self.assertEqual(s, "s1")
+        self.assertAlmostEqual(r, 2.0 + 0.9 * 3.0 + 0.81 * 4.0)  # 7.94
+        self.assertEqual(ns, "s4")
+        self.assertEqual(d, 1.0)
+
+        # Flush remaining 2 items (step 2 and step 3)
+        flushed = nb.flush()
+        self.assertEqual(len(flushed), 2)
+        # Item 1 (from s2): 3.0 + 0.9 * 4.0 = 6.6
+        self.assertEqual(flushed[0][0], "s2")
+        self.assertAlmostEqual(flushed[0][2], 3.0 + 0.9 * 4.0)
+        self.assertEqual(flushed[0][3], "s4")
+        self.assertEqual(flushed[0][4], 1.0)
+        # Item 2 (from s3): 4.0
+        self.assertEqual(flushed[1][0], "s3")
+        self.assertAlmostEqual(flushed[1][2], 4.0)
+        self.assertEqual(flushed[1][3], "s4")
+        self.assertEqual(flushed[1][4], 1.0)
+
+        self.assertEqual(len(nb.buffer), 0)
+
+    def test_per_max_priority_drift_fixed(self):
+        import numpy as np
+        from rl.train_dqn import ReplayBuffer
+
+        buf = ReplayBuffer(capacity=10)
+        for i in range(5):
+            buf.push((np.zeros((1, 2, 2)), np.zeros(2)), 0, 0.0, (np.zeros((1, 2, 2)), np.zeros(2)), 0.0)
+
+        # Simulate large error spike (e.g. 20.0 death error)
+        buf.update_priorities([0], [20.0])
+        self.assertAlmostEqual(buf.max_priority, 20.0 + buf.priority_epsilon, places=4)
+
+        # In previous versions, max_priority would stay at 20.0 forever even after the transition is re-evaluated.
+        # Now, updating that transition with low error drops max_priority back down:
+        buf.update_priorities([0], [0.2])
+        self.assertLess(buf.max_priority, 1.5)
+
+    def test_n_step_stop_and_resume_matches_uninterrupted_run(self):
+        cfg = dict(TINY, n_step=3, gamma=0.99, target_tau=0.005)
+        _, model_a, _ = self._run_dir("nstep_a")
+        full = train_dqn(save_path=model_a, **cfg)
+        self.assertTrue(full["completed"])
+
+        _, model_b, state_b = self._run_dir("nstep_b")
+        first = train_dqn(save_path=model_b, stop_after=2, **cfg)
+        self.assertFalse(first["completed"])
+        self.assertTrue(os.path.exists(state_b))
+        self.assertEqual(torch.load(state_b, weights_only=True)["config"]["n_step"], 3)
+
+        resumed = train_dqn(resume=True, checkpoint_path=state_b, make_plots=False, final_val_episodes=2)
+        self.assertTrue(resumed["completed"])
+        self.assertEqual(resumed["metrics"], full["metrics"])
+        self.assertEqual(resumed["final_eval"], full["final_eval"])
+        best_a = torch.load(model_a, weights_only=True)
+        best_b = torch.load(model_b, weights_only=True)
+        for key in best_a:
+            self.assertTrue(torch.equal(best_a[key], best_b[key]), key)
 
 
 if __name__ == "__main__":
     unittest.main()
+
 

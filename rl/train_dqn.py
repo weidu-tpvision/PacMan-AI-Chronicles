@@ -51,7 +51,7 @@ from rl.dqn_model import ACTION_TO_IDX, NUM_CHANNELS, NUM_SCALARS, STALL_STEPS, 
 DEFAULT_WEIGHTS_DIR = os.path.join(os.path.dirname(__file__), "weights")
 DEFAULT_MODEL_PATH = os.path.join(DEFAULT_WEIGHTS_DIR, "dqn_pacman.pt")
 TRAINING_STATE_NAME = "dqn_training_state.pt"
-TRAINING_STATE_VERSION = 6  # v6: step-based budget & schedules, target_tau soft updates
+TRAINING_STATE_VERSION = 7  # v7: n-step returns, live max-priority, step-based schedules
 
 
 def default_num_threads() -> int:
@@ -203,7 +203,8 @@ class ReplayBuffer:
         for index, error in zip(indices, td_errors):
             priority = abs(float(error)) + self.priority_epsilon
             self.priorities[index] = priority
-            self.max_priority = max(self.max_priority, priority)
+        if self.size > 0:
+            self.max_priority = max(float(np.max(self.priorities[:self.size])), self.priority_epsilon)
 
     _OBS_ARRAYS = ("grids", "scalars", "next_grids", "next_scalars")
     _TRANSITION_ARRAYS = ("priorities", "actions", "rewards", "dones", "next_action_masks")
@@ -300,6 +301,51 @@ def soft_update(target_net: nn.Module, policy_net: nn.Module, tau: float) -> Non
             target_param.lerp_(param, tau)
 
 
+class NStepBuffer:
+    """Accumulates n-step discounted returns: R = sum_{i=0}^{m-1} gamma^i * r_i.
+
+    Maintains a rolling deque of transitions within an episode. When len == n, yields
+    the oldest transition discounted over n steps to next_obs. When an episode ends,
+    flush() drains the remaining m < n transitions, which are all terminal (d=1.0).
+    """
+    def __init__(self, n: int, gamma: float):
+        if n < 1:
+            raise ValueError(f"n_step must be >= 1, got {n}")
+        self.n = n
+        self.gamma = gamma
+        self.buffer = collections.deque()
+
+    def add(self, obs, action_idx, reward, next_obs, done, next_mask):
+        self.buffer.append((obs, action_idx, reward, next_obs, done, next_mask))
+        if len(self.buffer) == self.n:
+            return self._pop_n_step_transition()
+        return None
+
+    def _pop_n_step_transition(self):
+        obs, action_idx = self.buffer[0][0], self.buffer[0][1]
+        reward = 0.0
+        for i, transition in enumerate(self.buffer):
+            reward += (self.gamma ** i) * transition[2]
+        last = self.buffer[-1]
+        self.buffer.popleft()
+        return obs, action_idx, reward, last[3], float(last[4]), last[5]
+
+    def flush(self):
+        transitions = []
+        while self.buffer:
+            obs, action_idx = self.buffer[0][0], self.buffer[0][1]
+            reward = 0.0
+            for i, transition in enumerate(self.buffer):
+                reward += (self.gamma ** i) * transition[2]
+            last = self.buffer[-1]
+            transitions.append((obs, action_idx, reward, last[3], float(last[4]), last[5]))
+            self.buffer.popleft()
+        return transitions
+
+    def clear(self):
+        self.buffer.clear()
+
+
 def evaluate_dqn(policy_net: nn.Module, episodes: int = 15, max_steps: int = DEFAULT_MAX_STEPS) -> Tuple[float, float]:
     """Mean score and pellets of the pure greedy policy (no inference heuristics) on the
     first `episodes` VAL seeds (the checkpoint-selection seeds)."""
@@ -357,6 +403,7 @@ def train_dqn(
     lr: float = 5e-4,
     batch_size: int = 64,
     gamma: float = 0.99,
+    n_step: int = 1,
     epsilon_start: float = 1.0,
     epsilon_min: float = 0.05,
     epsilon_decay_fraction: float = 0.6,
@@ -399,6 +446,11 @@ def train_dqn(
     Target network: Polyak-averaged after every gradient update when `target_tau` > 0,
     otherwise hard-copied every `target_update_steps` environment steps.
 
+    Multi-step returns: transitions accumulate discounted returns over `n_step` environment
+    steps (default 1; R = sum_{i=0}^{n-1} gamma^i * r_i) and bootstrap from s_{t+n} with discount gamma^n.
+    At episode termination (collision, win, horizon cutoff), remaining transitions flush as
+    terminal targets.
+
     All schedules are pure functions of the environment-step counter: exploration decays
     from `epsilon_start` to `epsilon_min` over `epsilon_decay_fraction` of the budget, the
     PER exponent anneals from `per_beta_start` to 1 and the learning rate follows a cosine
@@ -428,6 +480,7 @@ def train_dqn(
         total_steps = cfg.get("total_steps")
         episodes = cfg.get("episodes")
         lr, batch_size, gamma = cfg["lr"], cfg["batch_size"], cfg["gamma"]
+        n_step = cfg.get("n_step", 1)
         epsilon_start, epsilon_min, epsilon_decay_fraction = cfg["epsilon_start"], cfg["epsilon_min"], cfg["epsilon_decay_fraction"]
         per_beta_start, target_update_steps, train_every = cfg["per_beta_start"], cfg["target_update_steps"], cfg["train_every"]
         target_tau = cfg.get("target_tau", 0.0)
@@ -443,6 +496,8 @@ def train_dqn(
         raise ValueError(f"total_steps must be >= 1, got {total_steps}")
     if episodes is not None and episodes < 1:
         raise ValueError(f"episodes must be >= 1, got {episodes}")
+    if n_step < 1:
+        raise ValueError(f"n_step must be >= 1, got {n_step}")
     if train_every < 1:
         raise ValueError(f"train_every must be >= 1, got {train_every}")
     if val_every_steps is not None and val_every_steps < 1:
@@ -453,9 +508,11 @@ def train_dqn(
         raise ValueError(f"target_tau must be in [0, 1], got {target_tau}")
 
     budget_steps = total_steps if total_steps is not None else (episodes * max_steps)
+    gamma_n = gamma ** n_step
 
     config = {
-        "total_steps": total_steps, "episodes": episodes, "lr": lr, "batch_size": batch_size, "gamma": gamma,
+        "total_steps": total_steps, "episodes": episodes, "lr": lr, "batch_size": batch_size,
+        "gamma": gamma, "n_step": n_step,
         "epsilon_start": epsilon_start, "epsilon_min": epsilon_min, "epsilon_decay_fraction": epsilon_decay_fraction,
         "per_beta_start": per_beta_start, "target_update_steps": target_update_steps, "target_tau": target_tau,
         "train_every": train_every, "warmup_steps": warmup_steps, "max_steps": max_steps,
@@ -556,7 +613,7 @@ def train_dqn(
             log_print("======================================================================")
             log_print(f" DEEP Q-NETWORK (DQN) TRAINING: {NUM_CHANNELS} grid planes + {NUM_SCALARS} scalars")
             log_print("======================================================================")
-            log_print(f"Device: {device} ({num_threads} threads) | Batch Size: {batch_size} | Learning Rate: {lr} | Gamma: {gamma} | Seed: {seed}")
+            log_print(f"Device: {device} ({num_threads} threads) | Batch Size: {batch_size} | Learning Rate: {lr} | Gamma: {gamma} (n-step: {n_step}) | Seed: {seed}")
             log_print(f"Budget: {budget_str} | Horizon: {max_steps} | Target: {target_mode} | "
                       f"Update: every {train_every} step(s) (replay ratio {batch_size / train_every:g}) | Buffer: {buffer_capacity:,}")
             log_print(f"Validation: {val_episodes} VAL seeds {val_str} (pure greedy policy)")
@@ -565,7 +622,8 @@ def train_dqn(
 
             # ---- Warm-up phase (uniform random policy) ----
             env = Environment(seed=train_seed(rng))
-            for _ in range(warmup_steps):
+            n_step_warmup = NStepBuffer(n_step, gamma)
+            while len(replay_buffer) < warmup_steps:
                 legal = env.get_legal_moves(*env.pacman_pos)
                 s = observe(env, env.steps_without_pellet, max(0, max_steps - env.step_count), max_steps)
 
@@ -580,10 +638,17 @@ def train_dqn(
                 if not next_mask.any():
                     next_mask[:] = True
                 done = col or won or env.step_count >= max_steps
-                replay_buffer.push(s, ACTION_TO_IDX[m], r, ns, float(done), next_mask)
+                tr = n_step_warmup.add(s, ACTION_TO_IDX[m], r, ns, float(done), next_mask)
+                if tr is not None:
+                    replay_buffer.push(*tr)
 
                 if done:
+                    for tr in n_step_warmup.flush():
+                        replay_buffer.push(*tr)
                     env = Environment(seed=train_seed(rng))
+
+            for tr in n_step_warmup.flush():
+                replay_buffer.push(*tr)
 
             log_print("Warm-up complete! Beginning DQN neural optimization...\n")
 
@@ -595,6 +660,7 @@ def train_dqn(
         try:
             while ep < session_end and steps_done < budget_steps:
                 env = Environment(seed=train_seed(rng))
+                n_step_buffer = NStepBuffer(n_step, gamma)
                 ep_reward = 0.0
                 pellets_eaten = 0
                 collided = won = False
@@ -637,7 +703,9 @@ def train_dqn(
                     next_mask = np.array([a in next_legal for a in ACTION_TO_IDX], dtype=np.bool_)
                     if not next_mask.any():
                         next_mask[:] = True
-                    replay_buffer.push(s, ACTION_TO_IDX[m], r, ns, float(terminal), next_mask)
+                    tr = n_step_buffer.add(s, ACTION_TO_IDX[m], r, ns, float(terminal), next_mask)
+                    if tr is not None:
+                        replay_buffer.push(*tr)
 
                     # Sample batch & optimize (every train_every steps of the global,
                     # checkpointed step counter, so resumed runs update at the same steps)
@@ -650,7 +718,7 @@ def train_dqn(
                             next_q_online = policy_net(batch["next_grids"], batch["next_scalars"])
                             best_next_actions = masked_next_actions(next_q_online, batch["next_action_masks"])
                             next_target_q = target_net(batch["next_grids"], batch["next_scalars"]).gather(1, best_next_actions)
-                            expected_q = batch["rewards"] + gamma * next_target_q * (1.0 - batch["dones"])
+                            expected_q = batch["rewards"] + gamma_n * next_target_q * (1.0 - batch["dones"])
 
                         td_errors = expected_q - curr_q
                         per_item_loss = nn.functional.smooth_l1_loss(curr_q, expected_q, reduction="none")
@@ -671,6 +739,8 @@ def train_dqn(
                         target_net.load_state_dict(policy_net.state_dict())
 
                     if terminal:
+                        for tr in n_step_buffer.flush():
+                            replay_buffer.push(*tr)
                         break
 
                 current_lr = optimizer.param_groups[0]["lr"]
@@ -807,6 +877,8 @@ if __name__ == "__main__":
                         help="Number of training episodes (optional alternative to --total-steps)")
     parser.add_argument("--lr", type=float, default=None, help="Learning rate (default 5e-4)")
     parser.add_argument("--batch-size", type=int, default=None, help="Batch size (default 64)")
+    parser.add_argument("--gamma", type=float, default=None, help="Discount factor (default 0.99)")
+    parser.add_argument("--n-step", type=int, default=None, help="Multi-step return horizon (default 1)")
     parser.add_argument("--train-every", type=int, default=None,
                         help="Gradient update every N environment steps (default 1)")
     parser.add_argument("--target-tau", type=float, default=None,
@@ -836,10 +908,11 @@ if __name__ == "__main__":
 
     hyper = {
         "total_steps": args.total_steps, "episodes": args.episodes, "lr": args.lr,
-        "batch_size": args.batch_size, "train_every": args.train_every,
-        "target_tau": args.target_tau, "target_update_steps": args.target_update_steps,
-        "buffer_capacity": args.buffer_capacity, "val_every_steps": args.val_every_steps,
-        "val_every": args.val_every, "seed": args.seed, "save_path": args.save_path,
+        "batch_size": args.batch_size, "gamma": args.gamma, "n_step": args.n_step,
+        "train_every": args.train_every, "target_tau": args.target_tau,
+        "target_update_steps": args.target_update_steps, "buffer_capacity": args.buffer_capacity,
+        "val_every_steps": args.val_every_steps, "val_every": args.val_every,
+        "seed": args.seed, "save_path": args.save_path,
     }
     passed = {k: v for k, v in hyper.items() if v is not None}
     if args.resume and passed:
