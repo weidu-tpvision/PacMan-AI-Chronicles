@@ -1,0 +1,25 @@
+{
+  "seeds": [
+    20020,
+    20219
+  ],
+  "selection_seeds": [
+    20000,
+    20019
+  ],
+  "best_checkpoint": {
+    "episode": 1154,
+    "step": 50000,
+    "selection_score": 327.5,
+    "mean_score": 305.55,
+    "score_ci95": 16.91,
+    "mean_pellets": 50.45
+  },
+  "final_weights": {
+    "episode": 1154,
+    "step": 50000,
+    "mean_score": 305.55,
+    "score_ci95": 16.91,
+    "mean_pellets": 50.45
+  }
+}
