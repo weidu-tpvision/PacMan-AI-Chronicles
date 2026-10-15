@@ -8,18 +8,18 @@
     20019
   ],
   "best_checkpoint": {
-    "episode": 3075,
-    "step": 200000,
-    "selection_score": 537,
-    "mean_score": 494.6,
-    "score_ci95": 30.15,
-    "mean_pellets": 67.66
+    "episode": 5268,
+    "step": 325029,
+    "selection_score": 984.5,
+    "mean_score": 943.9,
+    "score_ci95": 42.6,
+    "mean_pellets": 109.99
   },
   "final_weights": {
-    "episode": 3075,
-    "step": 200000,
-    "mean_score": 494.6,
-    "score_ci95": 30.15,
-    "mean_pellets": 67.66
+    "episode": 5881,
+    "step": 400000,
+    "mean_score": 1005.2,
+    "score_ci95": 44.1,
+    "mean_pellets": 115.62
   }
 }

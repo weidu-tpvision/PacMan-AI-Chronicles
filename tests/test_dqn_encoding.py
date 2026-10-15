@@ -75,6 +75,22 @@ class TestDQNEncoding(unittest.TestCase):
         self.assertEqual(s[SCALAR_STALL], 1.0)  # saturates at the stall threshold
         self.assertAlmostEqual(float(s[SCALAR_HORIZON]), 0.5)
 
+    def test_pacman_dqn_dilated_architecture(self):
+        try:
+            import torch
+            from rl.dqn_model import CONV_DILATIONS, CONV_LAYERS, PacmanDQN
+        except ImportError:
+            self.skipTest("PyTorch is required for this test")
+
+        self.assertEqual(CONV_LAYERS, len(CONV_DILATIONS))
+        self.assertIn(2, CONV_DILATIONS)
+
+        net = PacmanDQN()
+        grid = torch.zeros(2, NUM_CHANNELS, 21, 19)
+        scalars = torch.zeros(2, NUM_SCALARS)
+        q_vals = net(grid, scalars)
+        self.assertEqual(q_vals.shape, (2, 4))
+
 
 if __name__ == "__main__":
     unittest.main()

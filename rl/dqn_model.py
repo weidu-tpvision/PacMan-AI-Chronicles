@@ -50,11 +50,12 @@ NUM_SCALARS = 2
 # scalar saturates here, which keeps that penalty a function of the observation.
 STALL_STEPS = 45
 
-# Full-resolution network: CONV_LAYERS x (3x3 conv, CONV_WIDTH channels) -> receptive
-# field (2 * CONV_LAYERS + 1) tiles, then a 1x1 reduction to REDUCED_CHANNELS before
-# the dense layer.
-CONV_LAYERS = 6
+# Full-resolution network: ConvNet trunk with standard 3x3 convs and a dilated conv layer (d=2)
+# to expand the receptive field across maze corridors without pooling, then a 1x1 reduction
+# to REDUCED_CHANNELS before the dense layer.
 CONV_WIDTH = 32
+CONV_DILATIONS = (1, 1, 1, 1, 2, 1, 1)
+CONV_LAYERS = len(CONV_DILATIONS)
 REDUCED_CHANNELS = 16
 HIDDEN_UNITS = 128
 
@@ -227,11 +228,20 @@ if TORCH_AVAILABLE:
         combined as Q = V + A - mean(A).
         """
 
-        def __init__(self, in_channels: int = NUM_CHANNELS, num_scalars: int = NUM_SCALARS, num_actions: int = 4):
+        def __init__(
+            self,
+            in_channels: int = NUM_CHANNELS,
+            num_scalars: int = NUM_SCALARS,
+            num_actions: int = 4,
+            dilations: Tuple[int, ...] = CONV_DILATIONS,
+        ):
             super().__init__()
             layers, channels = [], in_channels
-            for _ in range(CONV_LAYERS):
-                layers += [nn.Conv2d(channels, CONV_WIDTH, kernel_size=3, padding=1), nn.ReLU()]
+            for d in dilations:
+                layers += [
+                    nn.Conv2d(channels, CONV_WIDTH, kernel_size=3, padding=d, dilation=d),
+                    nn.ReLU(),
+                ]
                 channels = CONV_WIDTH
             layers += [nn.Conv2d(channels, REDUCED_CHANNELS, kernel_size=1), nn.ReLU(), nn.Flatten()]
             self.trunk = nn.Sequential(*layers)

@@ -110,7 +110,7 @@ The observation is a pair `(grid, scalars)` computed from the current game state
 
 ### 3. Full-Resolution Neural Architecture (`PacmanDQN`)
 * **Input**: grid `(batch, NUM_CHANNELS, 21, 19)` and scalars `(batch, NUM_SCALARS)`
-* **Convolution stack**: `CONV_LAYERS` x (`Conv2d(3x3, padding=1)` + ReLU) at full grid resolution, **no pooling** — exact tile offsets between actors are preserved while the receptive field grows by 2 tiles per layer.
+* **Convolution stack**: `CONV_LAYERS` (7) layers with `CONV_DILATIONS = (1, 1, 1, 1, 2, 1, 1)` x (`Conv2d(3x3, padding=d, dilation=d)` + ReLU) at full grid resolution, **no pooling** — exact tile offsets between actors are preserved while the dilated layer ($d=2$) expands the effective receptive field to 17 tiles across walls into parallel corridors.
 * **Channel reduction**: `Conv2d(1x1)` to `REDUCED_CHANNELS` + ReLU, keeping the dense layer small.
 * **Shared feature head**: `Linear(REDUCED_CHANNELS * 21 * 19 + NUM_SCALARS, HIDDEN_UNITS)` + ReLU (flattened features concatenated with the scalars)
 * **Dueling heads**: `Linear(HIDDEN_UNITS, 1)` for state value $V(s)$ and `Linear(HIDDEN_UNITS, 4)` for action advantages $A(s,a)$.

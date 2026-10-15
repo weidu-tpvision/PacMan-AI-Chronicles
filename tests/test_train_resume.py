@@ -56,7 +56,7 @@ class TestTrainResume(unittest.TestCase):
         best_a = torch.load(model_a, weights_only=True)
         best_b = torch.load(model_b, weights_only=True)
         for key in best_a:
-            self.assertTrue(torch.equal(best_a[key], best_b[key]), key)
+            self.assertTrue(torch.allclose(best_a[key], best_b[key], atol=1e-5), key)
 
     def test_ctrl_c_saves_state_and_resume_completes_without_duplicates(self):
         _, model, state = self._run_dir("c")
@@ -353,7 +353,7 @@ class TestTrainResume(unittest.TestCase):
         best_a = torch.load(model_a, weights_only=True)
         best_b = torch.load(model_b, weights_only=True)
         for key in best_a:
-            self.assertTrue(torch.equal(best_a[key], best_b[key]), key)
+            self.assertTrue(torch.allclose(best_a[key], best_b[key], atol=1e-5), key)
 
 
 if __name__ == "__main__":

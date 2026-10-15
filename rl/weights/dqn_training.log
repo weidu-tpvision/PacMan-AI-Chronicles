@@ -2,29 +2,35 @@
  DEEP Q-NETWORK (DQN) TRAINING: 24 grid planes + 2 scalars
 ======================================================================
 Device: cpu (12 threads) | Batch Size: 128 | Learning Rate: 0.0005 | Gamma: 0.99 (n-step: 1) | Seed: 0
-Budget: 200,000 env steps | Horizon: 300 | Target: soft (tau=0.005) | Update: every 4 step(s) (replay ratio 32) | Buffer: 200,000
-Validation: 20 VAL seeds every 20,000 steps (pure greedy policy)
+Budget: 400,000 env steps | Horizon: 300 | Target: soft (tau=0.005) | Update: every 4 step(s) (replay ratio 32) | Buffer: 200,000
+Validation: 20 VAL seeds every 25,000 steps (pure greedy policy)
 Training state: rl\weights\dqn_training_state.pt every 100 episodes
 
 Warming up replay buffer with 1,000 random-policy steps...
 Warm-up complete! Beginning DQN neural optimization...
 
-Step 0020042/0200000 (Ep 0614) | Train Avg(50):  -60.2 | Val Score:  -14.5 (Pellets: 18.6) | eps: 0.61 | lr: 4.89e-04 | Time:  398s [* SAVED BEST]
-Step 0040001/0200000 (Ep 1120) | Train Avg(50):  -46.4 | Val Score:   66.5 (Pellets: 26.6) | eps: 0.37 | lr: 4.57e-04 | Time:  813s [* SAVED BEST]
-Step 0060039/0200000 (Ep 1532) | Train Avg(50):   19.6 | Val Score:  188.0 (Pellets: 38.8) | eps: 0.22 | lr: 4.07e-04 | Time: 1192s [* SAVED BEST]
-Step 0080049/0200000 (Ep 1869) | Train Avg(50):  127.4 | Val Score:  187.5 (Pellets: 38.8) | eps: 0.14 | lr: 3.44e-04 | Time: 1573s
-Step 0100084/0200000 (Ep 2151) | Train Avg(50):  244.8 | Val Score:  284.5 (Pellets: 48.5) | eps: 0.08 | lr: 2.75e-04 | Time: 1956s [* SAVED BEST]
-Step 0120082/0200000 (Ep 2368) | Train Avg(50):  348.0 | Val Score:  359.0 (Pellets: 55.9) | eps: 0.05 | lr: 2.05e-04 | Time: 2353s [* SAVED BEST]
-Step 0140028/0200000 (Ep 2561) | Train Avg(50):  366.2 | Val Score:  339.0 (Pellets: 53.9) | eps: 0.05 | lr: 1.43e-04 | Time: 2758s
-Step 0160130/0200000 (Ep 2734) | Train Avg(50):  340.8 | Val Score:  357.5 (Pellets: 53.8) | eps: 0.05 | lr: 9.27e-05 | Time: 3158s
-Step 0180168/0200000 (Ep 2910) | Train Avg(50):  389.4 | Val Score:  491.0 (Pellets: 66.1) | eps: 0.05 | lr: 6.08e-05 | Time: 3560s [* SAVED BEST]
-Step 0200000/0200000 (Ep 3075) | Train Avg(50):  380.0 | Val Score:  537.0 (Pellets: 69.7) | eps: 0.05 | lr: 5.00e-05 | Time: 3968s [* SAVED BEST]
+Step 0025014/0400000 (Ep 0799) | Train Avg(50):  -80.2 | Val Score:  -83.0 (Pellets: 11.7) | eps: 0.73 | lr: 4.96e-04 | Time:  524s [* SAVED BEST]
+Step 0050000/0400000 (Ep 1502) | Train Avg(50):  -71.6 | Val Score:   33.5 (Pellets: 23.4) | eps: 0.54 | lr: 4.83e-04 | Time: 1069s [* SAVED BEST]
+Step 0075008/0400000 (Ep 2153) | Train Avg(50):  -61.6 | Val Score:  145.0 (Pellets: 34.5) | eps: 0.39 | lr: 4.62e-04 | Time: 1617s [* SAVED BEST]
+Step 0100094/0400000 (Ep 2756) | Train Avg(50):   59.0 | Val Score:  255.5 (Pellets: 45.5) | eps: 0.29 | lr: 4.34e-04 | Time: 2133s [* SAVED BEST]
+Step 0125022/0400000 (Ep 3251) | Train Avg(50):  143.6 | Val Score:  372.5 (Pellets: 55.2) | eps: 0.21 | lr: 4.00e-04 | Time: 2675s [* SAVED BEST]
+Step 0150044/0400000 (Ep 3616) | Train Avg(50):  255.8 | Val Score:  566.5 (Pellets: 73.7) | eps: 0.15 | lr: 3.61e-04 | Time: 3295s [* SAVED BEST]
+Step 0175020/0400000 (Ep 3938) | Train Avg(50):  359.6 | Val Score:  575.5 (Pellets: 75.5) | eps: 0.11 | lr: 3.19e-04 | Time: 3894s [* SAVED BEST]
+Step 0200172/0400000 (Ep 4223) | Train Avg(50):  459.6 | Val Score:  756.5 (Pellets: 90.7) | eps: 0.08 | lr: 2.75e-04 | Time: 4474s [* SAVED BEST]
+Step 0225026/0400000 (Ep 4462) | Train Avg(50):  518.2 | Val Score:  895.5 (Pellets: 103.5) | eps: 0.06 | lr: 2.31e-04 | Time: 5046s [* SAVED BEST]
+Step 0250158/0400000 (Ep 4672) | Train Avg(50):  565.8 | Val Score:  877.5 (Pellets: 103.8) | eps: 0.05 | lr: 1.89e-04 | Time: 5632s
+Step 0275052/0400000 (Ep 4866) | Train Avg(50):  655.2 | Val Score:  913.0 (Pellets: 106.3) | eps: 0.05 | lr: 1.50e-04 | Time: 6162s [* SAVED BEST]
+Step 0300045/0400000 (Ep 5071) | Train Avg(50):  664.4 | Val Score:  865.0 (Pellets: 101.5) | eps: 0.05 | lr: 1.16e-04 | Time: 6745s
+Step 0325029/0400000 (Ep 5268) | Train Avg(50):  637.4 | Val Score:  984.5 (Pellets: 112.5) | eps: 0.05 | lr: 8.79e-05 | Time: 7302s [* SAVED BEST]
+Step 0350124/0400000 (Ep 5480) | Train Avg(50):  590.8 | Val Score:  862.0 (Pellets: 104.2) | eps: 0.05 | lr: 6.70e-05 | Time: 7856s
+Step 0375011/0400000 (Ep 5689) | Train Avg(50):  629.2 | Val Score:  933.5 (Pellets: 108.3) | eps: 0.05 | lr: 5.43e-05 | Time: 8461s
+Step 0400000/0400000 (Ep 5881) | Train Avg(50):  743.4 | Val Score:  894.5 (Pellets: 103.5) | eps: 0.05 | lr: 5.00e-05 | Time: 9075s
 
 Final re-evaluation on 200 unseen VAL seeds (20020..20219)...
-  Best checkpoint (ep 3075, step 200,000):   494.6 +/-  30.1 (pellets  67.7)
-  Final weights   (ep 3075, step 200,000):   494.6 +/-  30.1 (pellets  67.7)
+  Best checkpoint (ep 5268, step 325,029):   943.9 +/-  42.6 (pellets 110.0)
+  Final weights   (ep 5881, step 400,000):  1005.2 +/-  44.1 (pellets 115.6)
 
 ======================================================================
  TRAINING COMPLETE! Best Checkpoint Saved to rl\weights\dqn_pacman.pt
- Best Validation Score: 537.0 (episode 3075, step 200,000; selection score, optimistic)
+ Best Validation Score: 984.5 (episode 5268, step 325,029; selection score, optimistic)
 ======================================================================
