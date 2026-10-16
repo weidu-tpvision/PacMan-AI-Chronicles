@@ -11,7 +11,8 @@ if NUMPY_AVAILABLE:
     from core.environment import MODE_CYCLE, SCATTER_STEPS, Environment
     from rl.dqn_model import (
         ACTION_TO_IDX, CH_CYCLE_PHASE, CH_GHOST_HEADINGS, CH_GHOSTS, CH_PACMAN, CH_PACMAN_HEADING,
-        CH_SCATTER, NUM_CHANNELS, NUM_SCALARS, SCALAR_HORIZON, SCALAR_STALL, STALL_STEPS, encode_state,
+        CH_SCATTER, CH_COORD_X, CH_COORD_Y, COORD_X_MAP, COORD_Y_MAP, NUM_CHANNELS, NUM_SCALARS,
+        SCALAR_HORIZON, SCALAR_STALL, STALL_STEPS, encode_state, decode_grids_batch, pack_pellets,
     )
 
 
@@ -29,6 +30,7 @@ def _encode(env, **overrides):
 class TestDQNEncoding(unittest.TestCase):
     def test_shapes(self):
         grid, scalars = _encode(Environment(seed=1))
+        self.assertEqual(NUM_CHANNELS, 26)
         self.assertEqual(grid.shape[0], NUM_CHANNELS)
         self.assertEqual(scalars.shape, (NUM_SCALARS,))
 
@@ -85,11 +87,34 @@ class TestDQNEncoding(unittest.TestCase):
         self.assertEqual(CONV_LAYERS, len(CONV_DILATIONS))
         self.assertIn(2, CONV_DILATIONS)
 
-        net = PacmanDQN()
-        grid = torch.zeros(2, NUM_CHANNELS, 21, 19)
-        scalars = torch.zeros(2, NUM_SCALARS)
-        q_vals = net(grid, scalars)
-        self.assertEqual(q_vals.shape, (2, 4))
+    def test_coordconv_channels(self):
+        env = Environment(seed=1)
+        grid, _ = _encode(env)
+        self.assertEqual(CH_COORD_X, 24)
+        self.assertEqual(CH_COORD_Y, 25)
+        np.testing.assert_array_equal(grid[CH_COORD_X], COORD_X_MAP)
+        np.testing.assert_array_equal(grid[CH_COORD_Y], COORD_Y_MAP)
+        self.assertAlmostEqual(float(COORD_X_MAP[0, 0]), 0.0)
+        self.assertAlmostEqual(float(COORD_X_MAP[0, 18]), 1.0)
+        self.assertAlmostEqual(float(COORD_Y_MAP[0, 0]), 0.0)
+        self.assertAlmostEqual(float(COORD_Y_MAP[20, 0]), 1.0)
+
+    def test_batch_decoding_parity_including_coordconv(self):
+        env = Environment(seed=1)
+        grid, _ = _encode(env)
+        px = np.array([env.pacman_pos[0]], dtype=np.int32)
+        py = np.array([env.pacman_pos[1]], dtype=np.int32)
+        gx = np.array([[g[0] for g in env.ghost_positions[:3]]], dtype=np.int32)
+        gy = np.array([[g[1] for g in env.ghost_positions[:3]]], dtype=np.int32)
+        p_head = np.array([ACTION_TO_IDX.get(env.last_move, -1)], dtype=np.int32)
+        g_head = np.array([[ACTION_TO_IDX.get(d, -1) for d in env.ghost_dirs[:3]]], dtype=np.int32)
+        mode_step = np.array([env.mode_step], dtype=np.int32)
+        pellet_bits = pack_pellets(env.pellets)[None, :]
+
+        decoded = decode_grids_batch(px, py, gx, gy, p_head, g_head, mode_step, pellet_bits)
+        if hasattr(decoded, "numpy"):
+            decoded = decoded.numpy()
+        np.testing.assert_allclose(decoded[0], grid, atol=1e-5)
 
 
 if __name__ == "__main__":

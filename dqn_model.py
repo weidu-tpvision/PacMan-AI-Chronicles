@@ -19,6 +19,10 @@ from rl.dqn_model import (
     PELLET_COORDS,
     N_PELLETS,
     N_PELLET_BYTES,
+    CH_COORD_X,
+    CH_COORD_Y,
+    COORD_X_MAP,
+    COORD_Y_MAP,
 )
 
 __all__ = [
@@ -37,5 +41,9 @@ __all__ = [
     "PELLET_COORDS",
     "N_PELLETS",
     "N_PELLET_BYTES",
+    "CH_COORD_X",
+    "CH_COORD_Y",
+    "COORD_X_MAP",
+    "COORD_Y_MAP",
 ]
 

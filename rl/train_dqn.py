@@ -91,6 +91,7 @@ def compute_reward(
     won: bool,
     n_legal: int,
     steps_without_pellet: int,
+    pellets_remaining: int = 150,
 ) -> Tuple[float, bool]:
     """
     Reward for one transition: scaled score delta plus shaping.
@@ -100,9 +101,24 @@ def compute_reward(
     `stalled` means the stall penalty applied. Stalling never ends the episode: the
     trainer ends episodes exactly where evaluation does (collision, board cleared, time
     limit), and the stall plane in the observation keeps the penalty Markov.
+
+    Progressive pellet rewards:
+      - > 100 pellets remaining (early game): +10 (SCORE_PELLET)
+      - 51..100 pellets remaining (middle game): +25
+      - <= 50 pellets remaining (endgame): +50
     """
+    if ate:
+        if pellets_remaining > 100:
+            pellet_score = SCORE_PELLET
+        elif pellets_remaining > 50:
+            pellet_score = 25
+        else:
+            pellet_score = 50
+    else:
+        pellet_score = 0
+
     score_delta = (
-        (SCORE_PELLET if ate else 0)
+        pellet_score
         + (SCORE_DEATH if collided else 0)
         + (SCORE_WIN if won and not collided else 0)
     )
@@ -821,7 +837,7 @@ def train_dqn(
                 m = rng.choice(legal)
                 prev_move = env.last_move
                 col, ate, won = env.step(m)
-                r, _ = compute_reward(prev_move, m, ate, col, won, len(legal), env.steps_without_pellet)
+                r, _ = compute_reward(prev_move, m, ate, col, won, len(legal), env.steps_without_pellet, len(env.pellets))
 
                 ns = observe(env, env.steps_without_pellet, max(0, max_steps - env.step_count), max_steps)
                 next_legal = env.get_legal_moves(*env.pacman_pos)
@@ -885,7 +901,7 @@ def train_dqn(
                         steps_without_pellet += 1
                     collided = col
 
-                    r, _ = compute_reward(prev_move, m, ate, col, won, len(legal), steps_without_pellet)
+                    r, _ = compute_reward(prev_move, m, ate, col, won, len(legal), steps_without_pellet, len(env.pellets))
                     ep_reward += r
 
                     ns = observe(env, steps_without_pellet, max_steps - steps, max_steps)

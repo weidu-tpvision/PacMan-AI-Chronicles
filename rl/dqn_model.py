@@ -39,7 +39,9 @@ CH_PACMAN_HEADING = CH_GHOSTS + GHOST_SLOTS     # 4 one-hot planes, set at Pac-M
 CH_GHOST_HEADINGS = CH_PACMAN_HEADING + 4       # 4 one-hot planes per ghost, at its tile
 CH_SCATTER = CH_GHOST_HEADINGS + 4 * GHOST_SLOTS
 CH_CYCLE_PHASE = CH_SCATTER + 1
-NUM_CHANNELS = CH_CYCLE_PHASE + 1
+CH_COORD_X = CH_CYCLE_PHASE + 1
+CH_COORD_Y = CH_COORD_X + 1
+NUM_CHANNELS = CH_COORD_Y + 1
 
 # Scalar inputs to the dense layer
 SCALAR_STALL = 0
@@ -63,6 +65,10 @@ WALL_MAP = np.zeros((GRID_HEIGHT, GRID_WIDTH), dtype=np.float32)
 for x, y in WALL_CELLS:
     if 0 <= y < GRID_HEIGHT and 0 <= x < GRID_WIDTH:
         WALL_MAP[y, x] = 1.0
+
+# Precomputed static CoordConv spatial coordinate planes normalized to [0, 1]
+COORD_X_MAP = np.tile(np.linspace(0.0, 1.0, GRID_WIDTH, dtype=np.float32), (GRID_HEIGHT, 1))
+COORD_Y_MAP = np.tile(np.linspace(0.0, 1.0, GRID_HEIGHT, dtype=np.float32)[:, None], (1, GRID_WIDTH))
 
 
 def _on_grid(x: int, y: int) -> bool:
@@ -109,6 +115,8 @@ def encode_state(
     mode_in_cycle = mode_step % MODE_CYCLE  # phase of the ghosts' next move (clock mode_step + 1)
     grid[CH_SCATTER] = float(mode_in_cycle < SCATTER_STEPS)
     grid[CH_CYCLE_PHASE] = mode_in_cycle / max(1, MODE_CYCLE - 1)
+    grid[CH_COORD_X] = COORD_X_MAP
+    grid[CH_COORD_Y] = COORD_Y_MAP
 
     scalars = np.zeros(NUM_SCALARS, dtype=np.float32)
     scalars[SCALAR_STALL] = min(max(steps_without_pellet, 0), STALL_STEPS) / STALL_STEPS
@@ -185,6 +193,10 @@ def decode_grids_batch(
     m_cycle = mode_step % MODE_CYCLE
     grids[:, CH_SCATTER] = (m_cycle < SCATTER_STEPS).astype(np.float32)[:, None, None]
     grids[:, CH_CYCLE_PHASE] = (m_cycle / max(1, MODE_CYCLE - 1)).astype(np.float32)[:, None, None]
+
+    # CoordConv coordinate planes
+    grids[:, CH_COORD_X] = COORD_X_MAP
+    grids[:, CH_COORD_Y] = COORD_Y_MAP
 
     if TORCH_AVAILABLE:
         return torch.from_numpy(grids)

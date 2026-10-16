@@ -31,7 +31,7 @@ MODE_CYCLE = CHASE_STEPS + SCATTER_STEPS
 
 # Canonical scoring rules shared by tournament, trainers' reporting and frontends
 SCORE_PELLET = 10
-SCORE_DEATH = -200
+SCORE_DEATH = -500
 SCORE_WIN = 500
 
 # Canonical episode horizon shared by training, validation, CEM search and the tournament
