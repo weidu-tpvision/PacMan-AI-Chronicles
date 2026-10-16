@@ -99,22 +99,25 @@ The DQN subsystem implements DeepMind-inspired Deep Reinforcement Learning with 
 ### 1. Markov-Oriented, History-Free State Encoding (`encode_state`)
 The observation is a pair `(grid, scalars)` computed from the current game state only (see `rl/dqn_model.py` and `dqn.md` for the authoritative layout):
 * **Grid planes**: walls, pellets, Pac-Man position, one position map per ghost, Pac-Man heading and per-ghost headings (one-hot, set at each actor's own tile), Scatter flag and Scatter/Chase cycle phase, plus normalized X/Y CoordConv planes (`CH_COORD_X`, `CH_COORD_Y`).
+* **Spatial framing options**:
+  * **Option 2 (`egocentric=False`, default)**: Fixed top-down allocentric board view.
+  * **Option 1 (`egocentric=True` / `--egocentric`)**: Pac-Man-centered camera view rolled to `(CENTER_Y=10, CENTER_X=9)` using precomputed lookup tables (`ROLLED_WALL_MAPS`, `ROLLED_COORD_X`, `ROLLED_COORD_Y`).
 * **Scalars** (fed to the dense layer): stall progress and remaining episode horizon — they only change the value of the future, not local dynamics.
 * No previous-position maps: previous position = position − heading for every actor, so headings carry the motion information.
 
 ### 2. Inertia & Loop Handling
 * **Momentum Regulation**: Reversal penalties during training (`R_REVERSAL` in `rl/train_dqn.py`) and inference (`REVERSAL_PENALTY` in `agents/dqn_agent.py`) discourage micro-oscillations between adjacent empty corridor cells.
 * **Stall Penalty**: Once `STALL_STEPS` steps pass without a pellet, every further step costs `R_STALL_PER_STEP`. Stalls are penalized, not truncated, so training episodes end exactly where evaluation episodes do.
-* **Score-Aligned & Progressive Reward**: The reward scales `SCORE_DEATH` and `SCORE_WIN` by `REWARD_SCALE`, applies progressive pellet values (`+10`/`+25`/`+50` by remaining pellet tier) scaled by `REWARD_SCALE`, plus the small shaping terms above; see `dqn.md` for details.
+* **Score-Aligned Reward**: The reward scales `SCORE_PELLET`, `SCORE_DEATH`, and `SCORE_WIN` by `REWARD_SCALE` (preserving a constant `+10` pellet value and `50:1` death-to-pellet risk ratio throughout the episode), plus the small shaping terms above; see `dqn.md` for details.
 * **Anti-Orbit Dynamic Memory**: A rolling position buffer (`recent_positions`) tracks repeated tile visits during optional heuristic-assisted inference (`heuristics=True`). When no pellets have been eaten and a candidate move leads into repeatedly visited empty corridors, a penalty proportional to the visit count (`ORBIT_PENALTY_PER_VISIT`) is subtracted. By default (`heuristics=False`), the agent executes the pure neural Q-value policy.
 
 ### 3. Full-Resolution Neural Architecture (`PacmanDQN`)
 * **Input**: grid `(batch, NUM_CHANNELS, 21, 19)` and scalars `(batch, NUM_SCALARS)`
-* **Convolution stack**: `CONV_LAYERS` (7) layers with `CONV_DILATIONS = (1, 1, 1, 1, 2, 1, 1)` x (`Conv2d(3x3, padding=d, dilation=d)` + ReLU) at full grid resolution, **no pooling** — exact tile offsets between actors are preserved while the dilated layer ($d=2$) expands the effective receptive field to 17 tiles across walls into parallel corridors.
-* **Channel reduction**: `Conv2d(1x1)` to `REDUCED_CHANNELS` + ReLU, keeping the dense layer small.
+* **Convolution stack**: `CONV_LAYERS` (7) layers with `CONV_DILATIONS = (1, 1, 2, 2, 4, 1, 1)` x (`CircularXConv2d(3x3, dilation=d)` + ReLU) at full grid resolution, **no pooling** — exact tile offsets between actors are preserved while circular horizontal (`X`) padding connects the row-9 warp tunnel and the dilated stack expands the effective receptive field to $25 \times 25$ tiles (spanning the entire $19 \times 21$ board).
+* **Channel reduction**: `Conv2d(1x1)` to `REDUCED_CHANNELS` (`8`) + ReLU, halving the coordinate-locked dense layer parameters.
 * **Shared feature head**: `Linear(REDUCED_CHANNELS * 21 * 19 + NUM_SCALARS, HIDDEN_UNITS)` + ReLU (flattened features concatenated with the scalars)
 * **Dueling heads**: `Linear(HIDDEN_UNITS, 1)` for state value $V(s)$ and `Linear(HIDDEN_UNITS, 4)` for action advantages $A(s,a)$.
-* **Checkpoint compatibility**: checkpoints from earlier encodings/networks are rejected with a "retrain" message; the agent falls back to `[UNTRAINED]` and the tournament skips the DQN rows.
+* **Checkpoint compatibility**: checkpoints store an `_egocentric` buffer so `DQNAgent` auto-detects Option 1 vs Option 2; checkpoints from incompatible encodings/networks are rejected with a "retrain" message (`[UNTRAINED]`).
 * **Aggregation**: $Q(s,a)=V(s)+A(s,a)-\operatorname{mean}_{a'}A(s,a')$, outputting Q-values for `[up, down, left, right]`.
 
 ### 4. Double DQN & Optimization

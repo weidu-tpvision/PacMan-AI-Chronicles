@@ -101,24 +101,9 @@ def compute_reward(
     `stalled` means the stall penalty applied. Stalling never ends the episode: the
     trainer ends episodes exactly where evaluation does (collision, board cleared, time
     limit), and the stall plane in the observation keeps the penalty Markov.
-
-    Progressive pellet rewards:
-      - > 100 pellets remaining (early game): +10 (SCORE_PELLET)
-      - 51..100 pellets remaining (middle game): +25
-      - <= 50 pellets remaining (endgame): +50
     """
-    if ate:
-        if pellets_remaining > 100:
-            pellet_score = SCORE_PELLET
-        elif pellets_remaining > 50:
-            pellet_score = 25
-        else:
-            pellet_score = 50
-    else:
-        pellet_score = 0
-
     score_delta = (
-        pellet_score
+        (SCORE_PELLET if ate else 0)
         + (SCORE_DEATH if collided else 0)
         + (SCORE_WIN if won and not collided else 0)
     )
@@ -131,7 +116,13 @@ def compute_reward(
     return r, stalled
 
 
-def observe(env: Environment, steps_without_pellet: int, steps_remaining: int, horizon: int) -> CompactObservation:
+def observe(
+    env: Environment,
+    steps_without_pellet: int,
+    steps_remaining: int,
+    horizon: int,
+    egocentric: bool = False,
+) -> CompactObservation:
     """(grid, scalars) observation of the environment's current state with compact metadata."""
     px, py = env.pacman_pos
     gx = tuple(int(g[0]) for g in env.ghost_positions[:GHOST_SLOTS])
@@ -145,6 +136,7 @@ def observe(env: Environment, steps_without_pellet: int, steps_remaining: int, h
         tuple(env.pacman_pos), [tuple(g) for g in env.ghost_positions], env.pellets,
         last_move=env.last_move, ghost_dirs=env.ghost_dirs, mode_step=env.mode_step,
         steps_without_pellet=steps_without_pellet, steps_remaining=steps_remaining, horizon=horizon,
+        egocentric=egocentric,
     )
     compact = (px, py, gx, gy, p_head, g_head, mode_step, pellet_bits, scalars)
     return CompactObservation(grid, scalars, compact)
@@ -266,11 +258,19 @@ class ReplayBuffer:
     _OBS_ARRAYS = ("grids", "scalars", "next_grids", "next_scalars")
     _TRANSITION_ARRAYS = ("priorities", "actions", "rewards", "dones", "next_action_masks")
 
-    def __init__(self, capacity: int = 200_000, rng: Optional[random.Random] = None, alpha: float = 0.6, priority_epsilon: float = 1e-5):
+    def __init__(
+        self,
+        capacity: int = 200_000,
+        rng: Optional[random.Random] = None,
+        alpha: float = 0.6,
+        priority_epsilon: float = 1e-5,
+        egocentric: bool = False,
+    ):
         self.capacity = capacity
         self.rng = rng or random.Random()
         self.alpha = alpha
         self.priority_epsilon = priority_epsilon
+        self.egocentric = egocentric
         self.position = 0
         self.size = 0
         self.max_priority = 1.0
@@ -377,12 +377,12 @@ class ReplayBuffer:
             grids = decode_grids_batch(
                 self.px[indices], self.py[indices], self.gx[indices], self.gy[indices],
                 self.p_head[indices], self.g_head[indices], self.mode_steps[indices],
-                self.pellet_bits[indices]
+                self.pellet_bits[indices], egocentric=self.egocentric,
             )
             next_grids = decode_grids_batch(
                 self.next_px[indices], self.next_py[indices], self.next_gx[indices], self.next_gy[indices],
                 self.next_p_head[indices], self.next_g_head[indices], self.next_mode_steps[indices],
-                self.next_pellet_bits[indices]
+                self.next_pellet_bits[indices], egocentric=self.egocentric,
             )
         else:
             grids = torch.from_numpy(self.grids[indices].astype(np.float32))
@@ -416,7 +416,7 @@ class ReplayBuffer:
         state = {
             "capacity": self.capacity, "alpha": self.alpha, "priority_epsilon": self.priority_epsilon,
             "position": self.position, "size": n, "max_priority": self.max_priority,
-            "is_compact": self.is_compact,
+            "is_compact": self.is_compact, "egocentric": self.egocentric,
         }
         for name in self._TRANSITION_ARRAYS:
             state[name] = torch.from_numpy(np.asarray(getattr(self, name)[:n]))
@@ -434,6 +434,7 @@ class ReplayBuffer:
         n = state["size"]
         self.alpha = state["alpha"]
         self.priority_epsilon = state["priority_epsilon"]
+        self.egocentric = state.get("egocentric", False)
         self.position = state["position"]
         self.size = n
         for name in self._TRANSITION_ARRAYS:
@@ -569,6 +570,7 @@ def evaluate_dqn(policy_net: nn.Module, episodes: int = 15, max_steps: int = DEF
 def evaluate_dqn_episodes(policy_net: nn.Module, seeds, max_steps: int = DEFAULT_MAX_STEPS) -> Tuple[list, list]:
     """Per-episode scores and pellets of the pure greedy policy on `seeds`."""
     policy_net.eval()
+    egocentric = getattr(policy_net, "egocentric", False)
     scores, pellets_cleared = [], []
 
     for seed in seeds:
@@ -578,7 +580,7 @@ def evaluate_dqn_episodes(policy_net: nn.Module, seeds, max_steps: int = DEFAULT
 
         for step_index in range(max_steps):
             legal = env.get_legal_moves(*env.pacman_pos)
-            obs = observe(env, env.steps_without_pellet, max_steps - step_index, max_steps)
+            obs = observe(env, env.steps_without_pellet, max_steps - step_index, max_steps, egocentric=egocentric)
             move = greedy_action(policy_net, obs, legal)
 
             collided, ate_pellet, won = env.step(move)
@@ -637,6 +639,7 @@ def train_dqn(
     stop_after: Optional[int] = None,
     final_val_episodes: int = 200,
     num_threads: Optional[int] = None,
+    egocentric: bool = False,
 ):
     """Train (or resume training) the DQN for a budget of `total_steps` environment steps
     (warm-up excluded; the last episode is cut at the budget). Alternatively, an episode budget
@@ -700,6 +703,7 @@ def train_dqn(
         val_every = cfg.get("val_every")
         val_episodes = cfg["val_episodes"]
         seed, save_path, buffer_capacity = cfg["seed"], cfg["save_path"], cfg["buffer_capacity"]
+        egocentric = cfg.get("egocentric", False)
 
     if total_steps is None and episodes is None:
         total_steps = 1_000_000
@@ -729,6 +733,7 @@ def train_dqn(
         "train_every": train_every, "warmup_steps": warmup_steps, "max_steps": max_steps,
         "val_every_steps": val_every_steps, "val_every": val_every, "val_episodes": val_episodes,
         "seed": seed, "save_path": save_path, "buffer_capacity": buffer_capacity,
+        "egocentric": egocentric,
     }
 
     num_threads = num_threads or default_num_threads()
@@ -745,13 +750,13 @@ def train_dqn(
     final_eval_path = os.path.join(weights_dir, "dqn_final_eval.json")
 
     device = torch.device("cpu")
-    policy_net = PacmanDQN().to(device)
-    target_net = PacmanDQN().to(device)
+    policy_net = PacmanDQN(egocentric=egocentric).to(device)
+    target_net = PacmanDQN(egocentric=egocentric).to(device)
     target_net.load_state_dict(policy_net.state_dict())
     target_net.eval()
 
     optimizer = optim.Adam(policy_net.parameters(), lr=lr)
-    replay_buffer = ReplayBuffer(capacity=buffer_capacity, rng=rng)
+    replay_buffer = ReplayBuffer(capacity=buffer_capacity, rng=rng, egocentric=egocentric)
 
     metrics_history = []
     best_val_score = -float("inf")
@@ -815,6 +820,7 @@ def train_dqn(
 
         budget_str = f"{budget_steps:,} env steps" if total_steps is not None else f"{episodes} episodes ({budget_steps:,} env steps)"
         val_str = f"every {val_every} episodes" if val_every is not None else f"every {val_every_steps:,} steps"
+        framing_str = "Egocentric (Option 1: Pac-Man centered)" if egocentric else "Allocentric (Option 2: 25x25 dilated + circular X tunnel)"
 
         if start_episode:
             log_print(f"\n[RESUME] Continuing from step {steps_done:,}/{budget_steps:,} (episode {start_episode}) "
@@ -824,7 +830,8 @@ def train_dqn(
             log_print("======================================================================")
             log_print(f" DEEP Q-NETWORK (DQN) TRAINING: {NUM_CHANNELS} grid planes + {NUM_SCALARS} scalars")
             log_print("======================================================================")
-            log_print(f"Device: {device} ({num_threads} threads) | Batch Size: {batch_size} | Learning Rate: {lr} | Gamma: {gamma} (n-step: {n_step}) | Seed: {seed}")
+            log_print(f"Device: {device} ({num_threads} threads) | Framing: {framing_str}")
+            log_print(f"Batch Size: {batch_size} | Learning Rate: {lr} | Gamma: {gamma} (n-step: {n_step}) | Seed: {seed}")
             log_print(f"Budget: {budget_str} | Horizon: {max_steps} | Target: {target_mode} | "
                       f"Update: every {train_every} step(s) (replay ratio {batch_size / train_every:g}) | Buffer: {buffer_capacity:,}")
             log_print(f"Validation: {val_episodes} VAL seeds {val_str} (pure greedy policy)")
@@ -836,14 +843,14 @@ def train_dqn(
             n_step_warmup = NStepBuffer(n_step, gamma)
             while len(replay_buffer) < warmup_steps:
                 legal = env.get_legal_moves(*env.pacman_pos)
-                s = observe(env, env.steps_without_pellet, max(0, max_steps - env.step_count), max_steps)
+                s = observe(env, env.steps_without_pellet, max(0, max_steps - env.step_count), max_steps, egocentric=egocentric)
 
                 m = rng.choice(legal)
                 prev_move = env.last_move
                 col, ate, won = env.step(m)
-                r, _ = compute_reward(prev_move, m, ate, col, won, len(legal), env.steps_without_pellet, len(env.pellets))
+                r, _ = compute_reward(prev_move, m, ate, col, won, len(legal), env.steps_without_pellet)
 
-                ns = observe(env, env.steps_without_pellet, max(0, max_steps - env.step_count), max_steps)
+                ns = observe(env, env.steps_without_pellet, max(0, max_steps - env.step_count), max_steps, egocentric=egocentric)
                 next_legal = env.get_legal_moves(*env.pacman_pos)
                 next_mask = np.array([a in next_legal for a in ACTION_TO_IDX], dtype=np.bool_)
                 if not next_mask.any():
@@ -887,7 +894,7 @@ def train_dqn(
                         param_group["lr"] = current_lr
 
                     legal = env.get_legal_moves(*env.pacman_pos)
-                    s = observe(env, env.steps_without_pellet, max_steps - steps + 1, max_steps)
+                    s = observe(env, env.steps_without_pellet, max_steps - steps + 1, max_steps, egocentric=egocentric)
 
                     # Epsilon-greedy action selection over the raw network
                     if rng.random() < epsilon:
@@ -901,10 +908,10 @@ def train_dqn(
                         pellets_eaten += 1
                     collided = col
 
-                    r, _ = compute_reward(prev_move, m, ate, col, won, len(legal), env.steps_without_pellet, len(env.pellets))
+                    r, _ = compute_reward(prev_move, m, ate, col, won, len(legal), env.steps_without_pellet)
                     ep_reward += r
 
-                    ns = observe(env, env.steps_without_pellet, max_steps - steps, max_steps)
+                    ns = observe(env, env.steps_without_pellet, max_steps - steps, max_steps, egocentric=egocentric)
                     terminal = col or won or steps >= max_steps or steps_done >= budget_steps
                     next_legal = env.get_legal_moves(*env.pacman_pos)
                     next_mask = np.array([a in next_legal for a in ACTION_TO_IDX], dtype=np.bool_)
@@ -1036,7 +1043,7 @@ def train_dqn(
             # Unbiased re-check: seeds right after the selection seeds, never used to pick a checkpoint.
             seeds = val_seeds(final_val_episodes, offset=val_episodes)
             log_print(f"\nFinal re-evaluation on {len(seeds)} unseen VAL seeds ({seeds[0]}..{seeds[-1]})...")
-            best_net = PacmanDQN().to(device)
+            best_net = PacmanDQN(egocentric=egocentric).to(device)
             best_net.load_state_dict(torch.load(save_path, map_location=device, weights_only=True))
             final_eval = {
                 "seeds": [seeds[0], seeds[-1]],
@@ -1100,6 +1107,8 @@ if __name__ == "__main__":
                         help="Validate greedy policy every N episodes (optional alternative to --val-every-steps)")
     parser.add_argument("--seed", type=int, default=None, help="Global RNG seed (default 0)")
     parser.add_argument("--save-path", type=str, default=None, help="Path to save best model weights")
+    parser.add_argument("--egocentric", action="store_true", default=None,
+                        help="Use Option 1 (Pac-Man-centered egocentric view) instead of default Option 2 (fixed allocentric view)")
     parser.add_argument("--resume", action="store_true", help="Continue from the training-state checkpoint")
     parser.add_argument("--checkpoint-path", type=str, default=None,
                         help=f"Training-state file (default: <save-path dir>/{TRAINING_STATE_NAME})")
@@ -1119,7 +1128,7 @@ if __name__ == "__main__":
         "train_every": args.train_every, "target_tau": args.target_tau,
         "target_update_steps": args.target_update_steps, "buffer_capacity": args.buffer_capacity,
         "val_every_steps": args.val_every_steps, "val_every": args.val_every,
-        "seed": args.seed, "save_path": args.save_path,
+        "seed": args.seed, "save_path": args.save_path, "egocentric": args.egocentric,
     }
     passed = {k: v for k, v in hyper.items() if v is not None}
     if args.resume and passed:

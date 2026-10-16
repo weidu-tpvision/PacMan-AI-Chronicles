@@ -80,12 +80,34 @@ class TestDQNEncoding(unittest.TestCase):
     def test_pacman_dqn_dilated_architecture(self):
         try:
             import torch
-            from rl.dqn_model import CONV_DILATIONS, CONV_LAYERS, PacmanDQN
+            from rl.dqn_model import CONV_DILATIONS, CONV_LAYERS, REDUCED_CHANNELS, CircularXConv2d, PacmanDQN
         except ImportError:
             self.skipTest("PyTorch is required for this test")
 
         self.assertEqual(CONV_LAYERS, len(CONV_DILATIONS))
-        self.assertIn(2, CONV_DILATIONS)
+        self.assertEqual(CONV_DILATIONS, (1, 1, 2, 2, 4, 1, 1))
+        # Receptive field = 1 + 2 * sum(dilations) = 25x25 > 19x21 full board
+        receptive_field = 1 + 2 * sum(CONV_DILATIONS)
+        self.assertEqual(receptive_field, 25)
+        self.assertEqual(REDUCED_CHANNELS, 8)
+
+        net = PacmanDQN()
+        self.assertFalse(net.egocentric)
+        conv_layers = [m for m in net.trunk if isinstance(m, CircularXConv2d)]
+        self.assertEqual(len(conv_layers), CONV_LAYERS)
+
+        # Verify CircularXConv2d wraps horizontally across x=0 <-> x=18 but zero-pads vertically
+        layer = CircularXConv2d(1, 1, kernel_size=3, dilation=1)
+        with torch.no_grad():
+            layer.weight.zero_()
+            layer.bias.zero_()
+            # Weight sensitivity only to the left neighbor (dy=0, dx=-1)
+            layer.weight[0, 0, 1, 0] = 1.0
+            inp = torch.zeros((1, 1, 21, 19))
+            inp[0, 0, 9, 18] = 5.0  # right tunnel entrance at x=18
+            out = layer(inp)
+            # At x=0 (left tunnel entrance), its left neighbor (dx=-1) wraps to x=18!
+            self.assertAlmostEqual(float(out[0, 0, 9, 0].item()), 5.0)
 
     def test_coordconv_channels(self):
         env = Environment(seed=1)
@@ -101,21 +123,54 @@ class TestDQNEncoding(unittest.TestCase):
 
     def test_batch_decoding_parity_including_coordconv(self):
         env = Environment(seed=1)
-        grid, _ = _encode(env)
-        px = np.array([env.pacman_pos[0]], dtype=np.int32)
-        py = np.array([env.pacman_pos[1]], dtype=np.int32)
-        gx = np.array([[g[0] for g in env.ghost_positions[:3]]], dtype=np.int32)
-        gy = np.array([[g[1] for g in env.ghost_positions[:3]]], dtype=np.int32)
-        p_head = np.array([ACTION_TO_IDX.get(env.last_move, -1)], dtype=np.int32)
-        g_head = np.array([[ACTION_TO_IDX.get(d, -1) for d in env.ghost_dirs[:3]]], dtype=np.int32)
-        mode_step = np.array([env.mode_step], dtype=np.int32)
-        pellet_bits = pack_pellets(env.pellets)[None, :]
+        for egocentric in (False, True):
+            grid, _ = _encode(env, egocentric=egocentric)
+            px = np.array([env.pacman_pos[0]], dtype=np.int32)
+            py = np.array([env.pacman_pos[1]], dtype=np.int32)
+            gx = np.array([[g[0] for g in env.ghost_positions[:3]]], dtype=np.int32)
+            gy = np.array([[g[1] for g in env.ghost_positions[:3]]], dtype=np.int32)
+            p_head = np.array([ACTION_TO_IDX.get(env.last_move, -1)], dtype=np.int32)
+            g_head = np.array([[ACTION_TO_IDX.get(d, -1) for d in env.ghost_dirs[:3]]], dtype=np.int32)
+            mode_step = np.array([env.mode_step], dtype=np.int32)
+            pellet_bits = pack_pellets(env.pellets)[None, :]
 
-        decoded = decode_grids_batch(px, py, gx, gy, p_head, g_head, mode_step, pellet_bits)
-        if hasattr(decoded, "numpy"):
-            decoded = decoded.numpy()
-        np.testing.assert_allclose(decoded[0], grid, atol=1e-5)
+            decoded = decode_grids_batch(
+                px, py, gx, gy, p_head, g_head, mode_step, pellet_bits, egocentric=egocentric
+            )
+            if hasattr(decoded, "numpy"):
+                decoded = decoded.numpy()
+            np.testing.assert_allclose(decoded[0], grid, atol=1e-5)
+
+    def test_egocentric_option1_matches_rolled_allocentric(self):
+        from rl.dqn_model import CENTER_X, CENTER_Y
+
+        env = Environment(seed=7)
+        for _ in range(12):
+            env.step(env.get_legal_moves(*env.pacman_pos)[0])
+            alloc_grid, alloc_scalars = _encode(env, egocentric=False)
+            ego_grid, ego_scalars = _encode(env, egocentric=True)
+
+            px, py = env.pacman_pos
+            expected_ego = np.roll(alloc_grid, (CENTER_Y - py, CENTER_X - px), axis=(1, 2))
+            np.testing.assert_allclose(ego_grid, expected_ego, atol=1e-6)
+            np.testing.assert_array_equal(ego_scalars, alloc_scalars)
+            self.assertEqual(ego_grid[CH_PACMAN, CENTER_Y, CENTER_X], 1.0)
+            self.assertEqual(ego_grid[CH_PACMAN].sum(), 1.0)
+
+    def test_egocentric_flag_persists_in_checkpoint(self):
+        try:
+            import torch
+            from rl.dqn_model import PacmanDQN
+        except ImportError:
+            self.skipTest("PyTorch is required for this test")
+
+        net_ego = PacmanDQN(egocentric=True)
+        self.assertTrue(net_ego.egocentric)
+        restored = PacmanDQN(egocentric=False)
+        restored.load_state_dict(net_ego.state_dict())
+        self.assertTrue(restored.egocentric)
 
 
 if __name__ == "__main__":
     unittest.main()
+

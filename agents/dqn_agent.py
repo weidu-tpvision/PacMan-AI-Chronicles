@@ -53,6 +53,7 @@ class DQNAgent:
         name: str = "Deep Q-Network (PyTorch DQN)",
         heuristics: bool = False,
         require_weights: bool = False,
+        egocentric: bool = False,
     ):
         """
         Args:
@@ -61,10 +62,13 @@ class DQNAgent:
             require_weights: raise RuntimeError if torch or the checkpoint is unavailable
                 (use for benchmarks). Otherwise the agent degrades to a uniform random
                 policy and tags its name with "[UNTRAINED]" so results cannot be mistaken.
+            egocentric: default spatial framing (False = Option 2 fixed board; True = Option 1
+                Pac-Man centered). Overridden automatically by the checkpoint's saved flag.
         """
         self.name = name
         self.category = "Deep Neural RL (PyTorch CNN)"
         self.heuristics = heuristics
+        self.egocentric = egocentric
         self.prev_ghosts: Optional[List[Tuple[int, int]]] = None  # only for heading inference
         self.recent_positions: collections.deque = collections.deque(maxlen=16)
         self.last_pellet_count: Optional[int] = None
@@ -84,10 +88,11 @@ class DQNAgent:
             self.device = torch.device("cpu")
             try:
                 state_dict = torch.load(self.model_path, map_location=self.device, weights_only=True)
-                model = PacmanDQN().to(self.device)
+                model = PacmanDQN(egocentric=egocentric).to(self.device)
                 model.load_state_dict(state_dict)
                 model.eval()
                 self.model = model
+                self.egocentric = model.egocentric
                 self.model_loaded = True
             except RuntimeError as exc:  # parameter names / shapes differ
                 problem = (f"checkpoint {self.model_path} does not match the current network / observation "
@@ -171,6 +176,7 @@ class DQNAgent:
             steps_without_pellet=effective_stall_steps,
             steps_remaining=effective_remaining,
             horizon=horizon,
+            egocentric=self.egocentric,
         )
 
         self.prev_ghosts = [tuple(g) for g in ghost_positions]

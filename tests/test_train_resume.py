@@ -360,8 +360,32 @@ class TestTrainResume(unittest.TestCase):
         for key in best_a:
             self.assertTrue(torch.allclose(best_a[key], best_b[key], atol=1e-5), key)
 
+    def test_egocentric_train_resume_and_agent_autodetect(self):
+        from agents.dqn_agent import DQNAgent
+
+        cfg = dict(TINY, egocentric=True)
+        _, model_a, _ = self._run_dir("ego_a")
+        full = train_dqn(save_path=model_a, **cfg)
+        self.assertTrue(full["completed"])
+
+        _, model_b, state_b = self._run_dir("ego_b")
+        first = train_dqn(save_path=model_b, stop_after=2, **cfg)
+        self.assertFalse(first["completed"])
+        self.assertTrue(torch.load(state_b, weights_only=True)["config"]["egocentric"])
+
+        resumed = train_dqn(resume=True, checkpoint_path=state_b, make_plots=False, final_val_episodes=2)
+        self.assertTrue(resumed["completed"])
+        self.assertEqual(resumed["metrics"], full["metrics"])
+        self.assertEqual(resumed["final_eval"], full["final_eval"])
+
+        # DQNAgent initialized with default egocentric=False must auto-detect egocentric=True from checkpoint
+        agent = DQNAgent(model_path=model_a, require_weights=True)
+        self.assertTrue(agent.model_loaded)
+        self.assertTrue(agent.egocentric)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
 

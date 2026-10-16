@@ -52,22 +52,29 @@ The encoder is built around the question "does this variable change future trans
 
 ## 2. Network
 
-A stack of `CONV_LAYERS` `3 × 3` convolutions (`CONV_WIDTH` channels, dilations `CONV_DILATIONS = (1, 1, 1, 1, 2, 1, 1)`) with dilation-matched padding and **no pooling**, a `1 × 1` convolution to `REDUCED_CHANNELS`, then one dense layer (`HIDDEN_UNITS`) that receives the flattened features **and the scalars**, then dueling heads (`V(s)` and `A(s, a)`, combined as `Q = V + A − mean(A)`).
+`PacmanDQN` uses a stack of `CONV_LAYERS` (7) `3 × 3` convolutions (`CONV_WIDTH` channels, dilations `CONV_DILATIONS = (1, 1, 2, 2, 4, 1, 1)`) using `CircularXConv2d` (circular horizontal `X` padding across the row-9 warp tunnel and zero vertical `Y` padding) with **no pooling**, a `1 × 1` convolution to `REDUCED_CHANNELS` (`8`), then one dense layer (`HIDDEN_UNITS = 128`) that receives the flattened features **and the scalars**, then dueling heads (`V(s)` and `A(s, a)`, combined as `Q = V + A − mean(A)`).
 
-Why no pooling: on a tile maze one tile is the difference between "ghost adjacent" and "ghost two steps away". The earlier design pooled 2× right after a `5 × 5` receptive field, discarding exact relative positions before the network could use them, and left almost all parameters in one dense layer that had to do all maze-wide reasoning. Stacking convolutions at full resolution with a dilated middle layer ($d=2$) expands the effective receptive field to $17 \times 17$ tiles without losing 1-tile precision; the `1 × 1` reduction keeps the dense layer smaller.
+Why no pooling + full-board dilation + circular X padding:
+- On a tile maze one tile is the difference between "ghost adjacent" and "ghost two steps away". Pooling discards exact relative positions before the network can use them.
+- Stacking 7 convolutions at full resolution with dilations `(1, 1, 2, 2, 4, 1, 1)` expands the effective receptive field to $1 + 2 \times \sum d_i = 25 \times 25$ tiles, which exceeds the $19 \times 21$ maze so every tile's convolutional feature vector sees the **entire board** (including across the horizontal warp tunnel via `CircularXConv2d`) before reaching the dense layer.
+- Reducing channels to `REDUCED_CHANNELS = 8` via the `1 × 1` bottleneck halves the coordinate-locked `Linear` head parameter count (`~409k` instead of `~818k`), shifting capacity into the translation-invariant Conv trunk.
 
-### Not chosen (yet): Pac-Man-centered view
-Re-centering the grid on Pac-Man (wrapping horizontally through the tunnel) aligns convolution features with the action outputs and is the common choice for grid games. It is a larger change (coordinate transform in encoder, agent and replay) and remains a candidate experiment once the full-resolution network has a baseline.
+### Two supported spatial framing modes (`egocentric=False` default vs `egocentric=True`)
+Both spatial framing options are implemented and stored in the checkpoint's `_egocentric` buffer so `DQNAgent` and evaluators auto-detect the framing of any loaded model:
+1. **Option 2 — Allocentric Fixed Board (`egocentric=False`, default):**
+   - Pure Atari-style fixed top-down board view where `encode_state` and `decode_grids_batch` place walls, pellets, and actors at their absolute `(y, x)` board coordinates, and the $25 \times 25$ dilated `CircularXConv2d` trunk routes long-range value across the board.
+2. **Option 1 — Egocentric Pac-Man-Centered View (`egocentric=True` / `--egocentric`):**
+   - Rolls all spatial planes by `(CENTER_Y - py, CENTER_X - px)` so Pac-Man is always centered at `(10, 9)`. Precomputed rolled wall and coordinate lookup tables (`ROLLED_WALL_MAPS`, `ROLLED_COORD_X`, `ROLLED_COORD_Y`) keep vectorized batch decoding $O(1)$ (`~1 ms` per batch) with 100% mathematical parity with `np.roll`.
 
 ## 3. Objective
 
 ### Reward & shaping (`compute_reward`)
-The training reward scales `SCORE_DEATH` and `SCORE_WIN` from `core.environment` by `REWARD_SCALE`, uses progressive pellet values (`+10` when $>100$ pellets remain, `+25` for $51..100$, `+50` for $\le 50$) scaled by `REWARD_SCALE`, plus two small shaping terms:
+The training reward is strictly proportional to the true game score delta (`SCORE_PELLET = +10`, `SCORE_DEATH = -500`, `SCORE_WIN = +500` from `core.environment` scaled by `REWARD_SCALE = 0.1`), plus two small shaping terms:
 
 - `R_REVERSAL` — discourages reversing in a corridor when other moves exist (anti-oscillation).
 - `R_STALL_PER_STEP` — applied on every step once `STALL_STEPS` steps pass without a pellet. The stall scalar in the observation makes this penalty Markov.
 
-Previously the reward used its own pellet/death/win values whose ratios differed from the score (a death cost half as much, relative to pellets, as it does in the tournament), plus a per-step cost. A policy optimized for that reward is not optimizing the score it is judged on.
+Keeping `SCORE_PELLET = +10` constant across the entire episode preserves the `50:1` death-to-pellet risk ratio in the endgame (whereas progressive pellet tiers caused the agent to take fatal 10:1 gambles near ghosts when fewer than 50 pellets remained).
 
 ### Discount
 The discount's effective horizon, `1 / (1 − γ)`, must cover the span over which risk and reward matter. With a short horizon a death a few dozen steps ahead is nearly free compared to a pellet now, and the win bonus is invisible; that produces a greedy "eat until caught" policy. The default `gamma` is therefore long relative to typical episode lengths.

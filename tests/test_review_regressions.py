@@ -106,10 +106,12 @@ class TestReviewRegressions(unittest.TestCase):
         self.assertAlmostEqual(reward(collided=True), REWARD_SCALE * SCORE_DEATH)
         self.assertAlmostEqual(reward(ate=True, won=True), REWARD_SCALE * (SCORE_PELLET + SCORE_WIN))
 
-        # Progressive pellet rewards:
-        self.assertAlmostEqual(compute_reward(None, "left", True, False, False, 2, 0, pellets_remaining=120)[0], REWARD_SCALE * 10)
-        self.assertAlmostEqual(compute_reward(None, "left", True, False, False, 2, 0, pellets_remaining=75)[0], REWARD_SCALE * 25)
-        self.assertAlmostEqual(compute_reward(None, "left", True, False, False, 2, 0, pellets_remaining=25)[0], REWARD_SCALE * 50)
+        # Constant pellet rewards across early, middle, and endgame (strictly score-aligned):
+        for remaining in (120, 75, 25, 1):
+            self.assertAlmostEqual(
+                compute_reward(None, "left", True, False, False, 2, 0, pellets_remaining=remaining)[0],
+                REWARD_SCALE * SCORE_PELLET,
+            )
 
     @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch is optional")
     def test_replay_preserves_next_action_mask_and_masks_argmax(self):
