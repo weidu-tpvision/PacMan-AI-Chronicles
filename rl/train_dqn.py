@@ -1098,10 +1098,7 @@ def train_dqn(
         log_print(f" Best Validation Score: {best_val_score:.1f} (episode {best_val_episode}{step_str}; selection score, optimistic)")
         log_print("======================================================================")
 
-    export_metrics()
-    # The resumable state only serves unfinished runs; drop it so a stale state can't be resumed.
-    if os.path.exists(checkpoint_path):
-        os.remove(checkpoint_path)
+    save_training_state(ep, time.time() - t0)
 
     if make_plots:
         from rl.plot_metrics import plot_metrics  # lazy: pulls in pygame

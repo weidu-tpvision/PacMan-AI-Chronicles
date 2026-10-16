@@ -48,7 +48,7 @@ class TestTrainResume(unittest.TestCase):
 
         resumed = train_dqn(resume=True, checkpoint_path=state_b, make_plots=False, final_val_episodes=2)
         self.assertTrue(resumed["completed"])
-        self.assertFalse(os.path.exists(state_b), "training state must be removed after completion")
+        self.assertTrue(os.path.exists(state_b), "training state must be preserved after completion")
 
         self.assertEqual(resumed["metrics"], full["metrics"])
         self.assertEqual(resumed["best_val_episode"], full["best_val_episode"])
