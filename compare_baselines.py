@@ -39,7 +39,7 @@ DEFAULT_RESULTS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 
 
 
 def run_episode(agent, seed: int, max_moves: int = DEFAULT_MAX_STEPS) -> Dict:
-    """Play one seeded episode. Score = 10/pellet - 200 on death + 500 on clearing the board."""
+    """Play one seeded episode. Score = SCORE_PELLET/pellet + SCORE_DEATH on death + SCORE_WIN on clearing the board."""
     seed_everything(seed)
     if hasattr(agent, "reset"):
         agent.reset()

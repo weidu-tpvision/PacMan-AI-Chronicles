@@ -11,7 +11,7 @@ from typing import Dict, List
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from rl.dqn_model import NUM_CHANNELS, NUM_SCALARS
+from rl.dqn_model import N_PELLETS, NUM_CHANNELS, NUM_SCALARS
 
 ARCH_SUBTITLE = f"Architecture: {NUM_CHANNELS} grid planes + {NUM_SCALARS} scalars, full-resolution dueling Double DQN"
 
@@ -133,11 +133,12 @@ def generate_svg(metrics: List[Dict], output_svg_path: str):
     # 4. Panel 4: Pellets & Epsilon
     px, py, title, col = panels[3]
     x0, y0, w, h = draw_panel(px, py, title, col)
+    max_pellets = float(N_PELLETS)
     # Pellets
     pel_pts = []
     for m in val_metrics:
         x = x0 + (m["episode"] / max_ep) * w
-        y = y0 - (m.get("val_pellets", 0) / 100.0) * h
+        y = y0 - (min(m.get("val_pellets", 0), max_pellets) / max_pellets) * h
         pel_pts.append(f"{x:.1f},{y:.1f}")
     if pel_pts:
         svg.append(f'<polyline fill="none" stroke="#f59e0b" stroke-width="2.2" stroke-linecap="round" points="{" ".join(pel_pts)}"/>')
@@ -150,7 +151,7 @@ def generate_svg(metrics: List[Dict], output_svg_path: str):
         svg.append(f'<polyline fill="none" stroke="#a855f7" stroke-width="1.8" stroke-dasharray="4,4" points="{" ".join(eps_pts)}"/>')
     svg.append(f'<text x="{px + pw - 200}" y="{py + 22}" class="legend" fill="#f59e0b">― Val Pellets</text>')
     svg.append(f'<text x="{px + pw - 100}" y="{py + 22}" class="legend" fill="#a855f7">┄ Epsilon</text>')
-    svg.append(f'<text x="{x0 - 40}" y="{y0 - h + 10}" class="axis-label">100</text>')
+    svg.append(f'<text x="{x0 - 40}" y="{y0 - h + 10}" class="axis-label">{int(max_pellets)}</text>')
     svg.append(f'<text x="{x0 - 40}" y="{y0}" class="axis-label">0</text>')
 
     svg.append("</svg>")
@@ -247,7 +248,8 @@ def generate_png(metrics: List[Dict], output_png_path: str):
     px, py, _, col = panels[3]
     ax_x0, ax_y0 = px + 45, py + ph - 35
     ax_w, ax_h = pw - 65, ph - 65
-    pel_pts = [(int(ax_x0 + (m["episode"]/max_ep)*ax_w), int(ax_y0 - (m.get("val_pellets", 0)/100.0)*ax_h)) for m in val_metrics]
+    max_pellets = float(N_PELLETS)
+    pel_pts = [(int(ax_x0 + (m["episode"]/max_ep)*ax_w), int(ax_y0 - (min(m.get("val_pellets", 0), max_pellets)/max_pellets)*ax_h)) for m in val_metrics]
     if len(pel_pts) > 1:
         pygame.draw.lines(surf, (245, 158, 11), False, pel_pts, 2)
         for pt in pel_pts:

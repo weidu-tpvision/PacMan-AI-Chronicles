@@ -238,8 +238,9 @@ class TestReviewRegressions(unittest.TestCase):
         import agents.registry as registry
         from agents.dqn_agent import DQNAgent
 
-        untrained = lambda heuristics=True: DQNAgent(model_path="does_not_exist.pt", heuristics=heuristics)
-        with mock.patch.object(registry, "DQNAgent", untrained),              mock.patch.object(registry, "load_tournament_scores", lambda: {"DQN (+inference heuristics)": 586.7}):
+        untrained = lambda heuristics=False: DQNAgent(model_path="does_not_exist.pt", heuristics=heuristics)
+        with mock.patch.object(registry, "DQNAgent", untrained), \
+             mock.patch.object(registry, "load_tournament_scores", lambda: {"DQN (raw network)": 675.5, "DQN (+inference heuristics)": 586.7}):
             controllers = registry.build_controllers(object(), "nimble")
         dqn = next(c for c in controllers if c["id"] == "dqn")
         self.assertIn("[UNTRAINED]", dqn["name"])

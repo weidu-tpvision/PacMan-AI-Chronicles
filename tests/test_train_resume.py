@@ -166,6 +166,11 @@ class TestTrainResume(unittest.TestCase):
             expected = reference_rng.choices(range(37), weights=probabilities.tolist(), k=16)
             self.assertEqual(list(batch["indices"]), expected)
 
+        # Stratified sampling draws across disjoint CDF intervals and returns valid indices/weights
+        strat_batch = buf.sample(16, beta=0.5, stratified=True)
+        self.assertEqual(len(strat_batch["indices"]), 16)
+        self.assertTrue(np.all((strat_batch["indices"] >= 0) & (strat_batch["indices"] < 37)))
+
     def test_train_every_stop_and_resume_matches_uninterrupted_run(self):
         cfg = dict(TINY, train_every=2)
         _, model_a, _ = self._run_dir("te_a")

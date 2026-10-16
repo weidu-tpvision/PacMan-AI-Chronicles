@@ -98,15 +98,15 @@ The DQN subsystem implements DeepMind-inspired Deep Reinforcement Learning with 
 
 ### 1. Markov-Oriented, History-Free State Encoding (`encode_state`)
 The observation is a pair `(grid, scalars)` computed from the current game state only (see `rl/dqn_model.py` and `dqn.md` for the authoritative layout):
-* **Grid planes**: walls, pellets, Pac-Man position, one position map per ghost, Pac-Man heading and per-ghost headings (one-hot, set at each actor's own tile), Scatter flag and Scatter/Chase cycle phase.
+* **Grid planes**: walls, pellets, Pac-Man position, one position map per ghost, Pac-Man heading and per-ghost headings (one-hot, set at each actor's own tile), Scatter flag and Scatter/Chase cycle phase, plus normalized X/Y CoordConv planes (`CH_COORD_X`, `CH_COORD_Y`).
 * **Scalars** (fed to the dense layer): stall progress and remaining episode horizon — they only change the value of the future, not local dynamics.
 * No previous-position maps: previous position = position − heading for every actor, so headings carry the motion information.
 
 ### 2. Inertia & Loop Handling
 * **Momentum Regulation**: Reversal penalties during training (`R_REVERSAL` in `rl/train_dqn.py`) and inference (`REVERSAL_PENALTY` in `agents/dqn_agent.py`) discourage micro-oscillations between adjacent empty corridor cells.
 * **Stall Penalty**: Once `STALL_STEPS` steps pass without a pellet, every further step costs `R_STALL_PER_STEP`. Stalls are penalized, not truncated, so training episodes end exactly where evaluation episodes do.
-* **Score-Aligned Reward**: The reward is the tournament score delta scaled by `REWARD_SCALE` plus the small shaping terms above; see `dqn.md` for the rationale (including the long discount).
-* **Anti-Orbit Dynamic Memory**: A rolling position buffer (`recent_positions`) tracks repeated tile visits during inference. When no pellets have been eaten and a candidate move leads into repeatedly visited empty corridors, a penalty proportional to the visit count (`ORBIT_PENALTY_PER_VISIT`) is subtracted, allowing the agent to exit local corridor limit cycles without retraining.
+* **Score-Aligned & Progressive Reward**: The reward scales `SCORE_DEATH` and `SCORE_WIN` by `REWARD_SCALE`, applies progressive pellet values (`+10`/`+25`/`+50` by remaining pellet tier) scaled by `REWARD_SCALE`, plus the small shaping terms above; see `dqn.md` for details.
+* **Anti-Orbit Dynamic Memory**: A rolling position buffer (`recent_positions`) tracks repeated tile visits during optional heuristic-assisted inference (`heuristics=True`). When no pellets have been eaten and a candidate move leads into repeatedly visited empty corridors, a penalty proportional to the visit count (`ORBIT_PENALTY_PER_VISIT`) is subtracted. By default (`heuristics=False`), the agent executes the pure neural Q-value policy.
 
 ### 3. Full-Resolution Neural Architecture (`PacmanDQN`)
 * **Input**: grid `(batch, NUM_CHANNELS, 21, 19)` and scalars `(batch, NUM_SCALARS)`
@@ -120,22 +120,22 @@ The observation is a pair `(grid, scalars)` computed from the current game state
 ### 4. Double DQN & Optimization
 * **Target Network**: Decouples action selection from action evaluation to eliminate maximization bias; next-action selection is masked to legal moves:
   $$y = r + \gamma (1 - d) Q_{\text{target}}\left(s', \arg\max_{a' \in A_{\text{legal}}(s')} Q_{\text{policy}}(s', a')\right)$$
-* **Prioritized replay**: Samples transitions in proportion to $(|\delta|+\epsilon)^{\alpha}$ and applies annealed importance-sampling weights to the per-item Huber loss.
+* **Prioritized replay**: Compact 41-byte transition storage with binary `SumTree` / `MaxTree` sampling transitions in proportion to $(|\delta|+\epsilon)^{\alpha}$ and applying annealed importance-sampling weights to the per-item Huber loss.
 * **Loss**: Smooth L1 (Huber) Loss with gradient norm clipping.
-* **Optimizer**: Adam with cosine learning-rate annealing over the requested episode count.
+* **Optimizer**: Adam with cosine learning-rate annealing over the requested step budget.
 * **Hyperparameters**: defaults live in `rl/train_dqn.py` (`train_dqn()` signature and module constants). They are working values, not tuned or final — do not copy them into this document.
 * **Tournament scores**: see `results/tournament_results.json` (regenerate with `compare_baselines.py`); never record them here.
 
 ### 5. Training Diagnostic Protocol (Mandatory for Every Run)
 Every DQN training run must follow this standardized automated diagnostic workflow:
 
-1. **Per-Episode Metrics Logging**: Record `episode`, `score`, `train_avg_score`, `pellets`, `reward`, `steps`, `loss`, `epsilon`, `learning_rate`, `val_score`, and `val_pellets` in [`rl/weights/dqn_training_metrics.json`](rl/weights/dqn_training_metrics.json) and `.csv`.
+1. **Per-Episode Metrics Logging**: Record `episode`, `step`, `score`, `train_avg_score`, `pellets`, `reward`, `steps`, `loss`, `epsilon`, `learning_rate`, `val_score`, and `val_pellets` in [`rl/weights/dqn_training_metrics.json`](rl/weights/dqn_training_metrics.json) and `.csv`.
 2. **Automated Multi-Panel Figure Generation**: The training runner must execute [`rl/plot_metrics.py`](rl/plot_metrics.py) at the end of training to generate:
    * **Vector Dashboard**: [`rl/weights/dqn_training_figures.svg`](rl/weights/dqn_training_figures.svg) (scalable publication quality).
    * **Raster Dashboard**: [`rl/weights/dqn_training_figures.png`](rl/weights/dqn_training_figures.png) (4-panel visual dashboard).
 3. **Unbiased Final Evaluation**: When a run completes, the trainer re-evaluates the best checkpoint and the final weights on VAL seeds not used for selection and writes `rl/weights/dqn_final_eval.json`; compare runs on these numbers, not on the (optimistic) selection score.
 4. **Artifact-Only Results**: Training conclusions (validation means, best-checkpoint episode, quartile analyses) and run parameters live in the artifacts above — **not** in this document, so this guide can never drift from the latest run.
-5. **Checkpoint Status**: No full DQN training run has been performed since the latest DQN and environment changes (including the collision-rule fix); the shipped checkpoint predates them and must be retrained before its scores are meaningful.
+5. **Checkpoint Status**: `rl/weights/dqn_pacman.pt` holds the latest 26-channel CoordConv + dilated CNN checkpoint trained under `SCORE_DEATH = -500` (see `rl/weights/dqn_final_eval.json` and `rl/weights/dqn_training.log`).
 
 ### 6. Standardized Simulation Engine (`core.environment.Environment`)
 * **Single Source of Truth**: All game arenas ([`pacman_game.py`](pacman_game.py), [`web_arena.py`](web_arena.py)), training pipelines ([`rl/train_dqn.py`](rl/train_dqn.py), [`rl/train_q_learning.py`](rl/train_q_learning.py), [`rl/optimize_policy.py`](rl/optimize_policy.py)), and tournament runners ([`compare_baselines.py`](compare_baselines.py)) share the exact same `core.environment.Environment` engine.

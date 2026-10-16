@@ -51,13 +51,13 @@ class DQNAgent:
         self,
         model_path: str = "dqn_pacman.pt",
         name: str = "Deep Q-Network (PyTorch DQN)",
-        heuristics: bool = True,
+        heuristics: bool = False,
         require_weights: bool = False,
     ):
         """
         Args:
             model_path: checkpoint filename / path (resolved via rl/weights/).
-            heuristics: apply inference-time reversal / anti-orbit penalties.
+            heuristics: apply optional inference-time reversal / anti-orbit penalties.
             require_weights: raise RuntimeError if torch or the checkpoint is unavailable
                 (use for benchmarks). Otherwise the agent degrades to a uniform random
                 policy and tags its name with "[UNTRAINED]" so results cannot be mistaken.

@@ -204,28 +204,22 @@ class SumTree:
             k //= 2
 
     def sample(self, uniform_draws: np.ndarray, size: int) -> Tuple[np.ndarray, np.ndarray]:
-        """Sample indices given uniform draws in [0, total_sum).
+        """Vectorized batch sampling of indices given uniform draws in [0, total_sum).
 
         Returns (indices, priorities**alpha).
         """
-        B = len(uniform_draws)
-        indices = np.empty(B, dtype=np.int64)
-        scaled_priorities = np.empty(B, dtype=np.float64)
+        v = np.array(uniform_draws, dtype=np.float64, copy=True)
+        k = np.ones(len(v), dtype=np.int64)
+        depth = (self.tree_capacity - 1).bit_length()
+        for _ in range(depth):
+            left = 2 * k
+            left_sum = self.tree_sum[left]
+            go_right = v > left_sum
+            v = np.where(go_right, v - left_sum, v)
+            k = left + go_right
 
-        for b in range(B):
-            v = uniform_draws[b]
-            k = 1
-            while k < self.tree_capacity:
-                left = 2 * k
-                if v <= self.tree_sum[left]:
-                    k = left
-                else:
-                    v -= self.tree_sum[left]
-                    k = left + 1
-            idx = max(0, min(k - self.tree_capacity, size - 1))
-            indices[b] = idx
-            scaled_priorities[b] = self.tree_sum[k]
-
+        indices = np.clip(k - self.tree_capacity, 0, max(0, size - 1))
+        scaled_priorities = self.tree_sum[self.tree_capacity + indices]
         return indices, scaled_priorities
 
     def rebuild(self, priorities: np.ndarray, alpha: float = 0.6) -> None:
@@ -317,7 +311,7 @@ class ReplayBuffer:
             self.tree.update(int(index), float(value), alpha=self.alpha)
             self.max_priority = max(float(self.tree.max_value), self.priority_epsilon)
         else:
-            self.tree.rebuild(self.priorities, alpha=self.alpha)
+            self.tree.rebuild(self.priorities[:self.size], alpha=self.alpha)
             self.max_priority = max(float(self.tree.max_value), self.priority_epsilon)
 
     def _allocate(self, grid_shape, num_scalars: int):
@@ -363,13 +357,17 @@ class ReplayBuffer:
         self.rewards[i] = reward
         self.dones[i] = done
         self.next_action_masks[i] = True if next_action_mask is None else next_action_mask
-        self.priorities[i] = self.max_priority
         self.position = (i + 1) % self.capacity
         self.size = min(self.size + 1, self.capacity)
+        self.priorities[i] = self.max_priority
 
-    def sample(self, batch_size: int, beta: float = 0.4) -> dict:
+    def sample(self, batch_size: int, beta: float = 0.4, stratified: bool = False) -> dict:
         total = self.tree.total_sum
-        draws = np.array([self.rng.random() for _ in range(batch_size)]) * total
+        if stratified and batch_size > 1:
+            seg = total / batch_size
+            draws = np.array([(k + self.rng.random()) * seg for k in range(batch_size)], dtype=np.float64)
+        else:
+            draws = np.array([self.rng.random() for _ in range(batch_size)], dtype=np.float64) * total
         indices, scaled = self.tree.sample(draws, self.size)
         probs = scaled / total
         weights = (self.size * probs) ** (-beta)
@@ -404,9 +402,13 @@ class ReplayBuffer:
         }
 
     def update_priorities(self, indices, td_errors):
+        raw_priorities = np.asarray(self.priorities)
         for index, error in zip(indices, td_errors):
+            idx = int(index)
             priority = abs(float(error)) + self.priority_epsilon
-            self.priorities[index] = priority
+            raw_priorities[idx] = priority
+            self.tree.update(idx, priority, alpha=self.alpha)
+        self.max_priority = max(float(self.tree.max_value), self.priority_epsilon)
 
     def state_dict(self) -> dict:
         """Tensor snapshot of the filled part of the buffer (shares memory, no copy)."""
@@ -434,9 +436,13 @@ class ReplayBuffer:
         self.priority_epsilon = state["priority_epsilon"]
         self.position = state["position"]
         self.size = n
-        self.max_priority = state["max_priority"]
         for name in self._TRANSITION_ARRAYS:
-            getattr(self, name)[:n] = state[name].numpy()
+            arr = np.asarray(getattr(self, name))
+            arr[:n] = state[name].numpy()
+            if name == "priorities":
+                arr[n:] = 0.0
+        self.tree.rebuild(np.asarray(self.priorities)[:n], alpha=self.alpha)
+        self.max_priority = state["max_priority"]
         self.is_compact = state.get("is_compact", False)
         if self.is_compact:
             for name in self._COMPACT_ARRAYS:
@@ -570,14 +576,12 @@ def evaluate_dqn_episodes(policy_net: nn.Module, seeds, max_steps: int = DEFAULT
         env = Environment(seed=seed)
         score = pellets_count = 0
 
-        steps_without_pellet = 0
         for step_index in range(max_steps):
             legal = env.get_legal_moves(*env.pacman_pos)
-            obs = observe(env, steps_without_pellet, max_steps - step_index, max_steps)
+            obs = observe(env, env.steps_without_pellet, max_steps - step_index, max_steps)
             move = greedy_action(policy_net, obs, legal)
 
             collided, ate_pellet, won = env.step(move)
-            steps_without_pellet = 0 if ate_pellet else steps_without_pellet + 1
             if ate_pellet:
                 score += SCORE_PELLET
                 pellets_count += 1
@@ -871,7 +875,6 @@ def train_dqn(
                 ep_reward = 0.0
                 pellets_eaten = 0
                 collided = won = False
-                steps_without_pellet = 0
                 ep_losses = []
                 steps = 0
 
@@ -884,7 +887,7 @@ def train_dqn(
                         param_group["lr"] = current_lr
 
                     legal = env.get_legal_moves(*env.pacman_pos)
-                    s = observe(env, steps_without_pellet, max_steps - steps + 1, max_steps)
+                    s = observe(env, env.steps_without_pellet, max_steps - steps + 1, max_steps)
 
                     # Epsilon-greedy action selection over the raw network
                     if rng.random() < epsilon:
@@ -896,15 +899,12 @@ def train_dqn(
                     col, ate, won = env.step(m)
                     if ate:
                         pellets_eaten += 1
-                        steps_without_pellet = 0
-                    else:
-                        steps_without_pellet += 1
                     collided = col
 
-                    r, _ = compute_reward(prev_move, m, ate, col, won, len(legal), steps_without_pellet, len(env.pellets))
+                    r, _ = compute_reward(prev_move, m, ate, col, won, len(legal), env.steps_without_pellet, len(env.pellets))
                     ep_reward += r
 
-                    ns = observe(env, steps_without_pellet, max_steps - steps, max_steps)
+                    ns = observe(env, env.steps_without_pellet, max_steps - steps, max_steps)
                     terminal = col or won or steps >= max_steps or steps_done >= budget_steps
                     next_legal = env.get_legal_moves(*env.pacman_pos)
                     next_mask = np.array([a in next_legal for a in ACTION_TO_IDX], dtype=np.bool_)

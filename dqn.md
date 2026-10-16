@@ -17,13 +17,14 @@ Design notes for the Deep Q-Network agent: what it observes, how the network is 
 | `CH_PACMAN_HEADING` (4) | Pac-Man heading, one-hot, set at Pac-Man's tile |
 | `CH_GHOST_HEADINGS` (12) | Each ghost's heading, one-hot, set at that ghost's tile |
 | `CH_SCATTER`, `CH_CYCLE_PHASE` | Scatter flag and Scatter/Chase cycle phase for the ghosts' next move (full planes) |
+| `CH_COORD_X`, `CH_COORD_Y` | Static normalized $[0, 1]$ X and Y coordinate planes (CoordConv) |
 
 | Scalars (dense-layer input) | Content |
 | --- | --- |
 | `SCALAR_STALL` | Steps without a pellet, saturating at `STALL_STEPS` |
 | `SCALAR_HORIZON` | Remaining fraction of the episode horizon |
 
-**Placement rule:** an input that changes *what happens locally* is spatial (positions, headings, and the Scatter/Chase phase, which changes where each ghost heads next); an input that only changes *how much the future is worth* (stall progress drives the stall penalty, remaining horizon bounds future reward) goes straight to the dense layer, next to the value and advantage heads.
+**Placement rule:** an input that changes *what happens locally* is spatial (positions, headings, coordinate planes, and the Scatter/Chase phase, which changes where each ghost heads next); an input that only changes *how much the future is worth* (stall progress drives the stall penalty, remaining horizon bounds future reward) goes straight to the dense layer, next to the value and advantage heads.
 
 ### Separate binary channels, not one categorical map
 For a small symbolic grid, one 0/1 map per object type is preferred over a single integer-coded map (`0=empty, 1=wall, 2=pellet, …`):
@@ -51,17 +52,17 @@ The encoder is built around the question "does this variable change future trans
 
 ## 2. Network
 
-A stack of `CONV_LAYERS` `3 × 3` convolutions (`CONV_WIDTH` channels) with padding and **no pooling**, a `1 × 1` convolution to `REDUCED_CHANNELS`, then one dense layer (`HIDDEN_UNITS`) that receives the flattened features **and the scalars**, then dueling heads (`V(s)` and `A(s, a)`, combined as `Q = V + A − mean(A)`).
+A stack of `CONV_LAYERS` `3 × 3` convolutions (`CONV_WIDTH` channels, dilations `CONV_DILATIONS = (1, 1, 1, 1, 2, 1, 1)`) with dilation-matched padding and **no pooling**, a `1 × 1` convolution to `REDUCED_CHANNELS`, then one dense layer (`HIDDEN_UNITS`) that receives the flattened features **and the scalars**, then dueling heads (`V(s)` and `A(s, a)`, combined as `Q = V + A − mean(A)`).
 
-Why no pooling: on a tile maze one tile is the difference between "ghost adjacent" and "ghost two steps away". The earlier design pooled 2× right after a `5 × 5` receptive field, discarding exact relative positions before the network could use them, and left almost all parameters in one dense layer that had to do all maze-wide reasoning. Stacking convolutions at full resolution grows the receptive field by two tiles per layer without losing tile precision; the `1 × 1` reduction keeps the dense layer small. The cost is compute (every layer sees all 399 tiles), so the stack is kept narrow.
+Why no pooling: on a tile maze one tile is the difference between "ghost adjacent" and "ghost two steps away". The earlier design pooled 2× right after a `5 × 5` receptive field, discarding exact relative positions before the network could use them, and left almost all parameters in one dense layer that had to do all maze-wide reasoning. Stacking convolutions at full resolution with a dilated middle layer ($d=2$) expands the effective receptive field to $17 \times 17$ tiles without losing 1-tile precision; the `1 × 1` reduction keeps the dense layer smaller.
 
 ### Not chosen (yet): Pac-Man-centered view
 Re-centering the grid on Pac-Man (wrapping horizontally through the tunnel) aligns convolution features with the action outputs and is the common choice for grid games. It is a larger change (coordinate transform in encoder, agent and replay) and remains a candidate experiment once the full-resolution network has a baseline.
 
 ## 3. Objective
 
-### Reward follows the evaluation score
-The training reward is the **tournament score delta scaled by `REWARD_SCALE`** (pellet, death and win use `SCORE_PELLET`, `SCORE_DEATH`, `SCORE_WIN` from `core.environment`) plus two small shaping terms:
+### Reward & shaping (`compute_reward`)
+The training reward scales `SCORE_DEATH` and `SCORE_WIN` from `core.environment` by `REWARD_SCALE`, uses progressive pellet values (`+10` when $>100$ pellets remain, `+25` for $51..100$, `+50` for $\le 50$) scaled by `REWARD_SCALE`, plus two small shaping terms:
 
 - `R_REVERSAL` — discourages reversing in a corridor when other moves exist (anti-oscillation).
 - `R_STALL_PER_STEP` — applied on every step once `STALL_STEPS` steps pass without a pellet. The stall scalar in the observation makes this penalty Markov.
