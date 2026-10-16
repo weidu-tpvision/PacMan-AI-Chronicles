@@ -162,12 +162,12 @@ class TestTrainResume(unittest.TestCase):
 
         reference_rng = random.Random(7)
         for _ in range(20):
-            batch = buf.sample(16, beta=0.5)
+            batch = buf.sample(16, beta=0.5, stratified=False)
             expected = reference_rng.choices(range(37), weights=probabilities.tolist(), k=16)
             self.assertEqual(list(batch["indices"]), expected)
 
-        # Stratified sampling draws across disjoint CDF intervals and returns valid indices/weights
-        strat_batch = buf.sample(16, beta=0.5, stratified=True)
+        # Default stratified=True sampling draws across disjoint CDF intervals and returns valid indices/weights
+        strat_batch = buf.sample(16, beta=0.5)
         self.assertEqual(len(strat_batch["indices"]), 16)
         self.assertTrue(np.all((strat_batch["indices"] >= 0) & (strat_batch["indices"] < 37)))
 

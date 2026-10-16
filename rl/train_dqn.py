@@ -361,7 +361,7 @@ class ReplayBuffer:
         self.size = min(self.size + 1, self.capacity)
         self.priorities[i] = self.max_priority
 
-    def sample(self, batch_size: int, beta: float = 0.4, stratified: bool = False) -> dict:
+    def sample(self, batch_size: int, beta: float = 0.4, stratified: bool = True) -> dict:
         total = self.tree.total_sum
         if stratified and batch_size > 1:
             seg = total / batch_size
@@ -615,10 +615,10 @@ def train_dqn(
     episodes: Optional[int] = None,
     lr: float = 5e-4,
     batch_size: int = 64,
-    gamma: float = 0.99,
+    gamma: float = 0.995,
     n_step: int = 1,
     epsilon_start: float = 1.0,
-    epsilon_min: float = 0.05,
+    epsilon_min: float = 0.01,
     epsilon_decay_fraction: float = 0.6,
     per_beta_start: float = 0.4,
     target_update_steps: int = 400,

@@ -50,7 +50,7 @@ NUM_SCALARS = 2
 
 # Steps without a pellet after which the trainer applies its stall penalty; the stall
 # scalar saturates here, which keeps that penalty a function of the observation.
-STALL_STEPS = 45
+STALL_STEPS = 30
 
 # Full-resolution network:
 # - Option 2 (default, egocentric=False): 7-layer ConvNet trunk with dilated convolutions
@@ -59,7 +59,7 @@ STALL_STEPS = 45
 #   REDUCED_CHANNELS = 8 before the dense layer.
 # - Option 1 (optional, egocentric=True): rolls all spatial planes so Pac-Man is always centered
 #   at (CENTER_Y=10, CENTER_X=9) for full translational invariance in both Conv and Linear heads.
-CONV_WIDTH = 32
+CONV_WIDTH = 64
 CONV_DILATIONS = (1, 1, 2, 2, 4, 1, 1)
 CONV_LAYERS = len(CONV_DILATIONS)
 REDUCED_CHANNELS = 8
