@@ -33,19 +33,19 @@ At the same time, our code review uncovered **several subtle but high-leverage a
 
 ---
 
-## 2. Current Empirical Standing (Working Tree Benchmark)
+## 2. Current Empirical Standing (100-Seed Canonical Tournament)
 
-*Source: [`results/tournament_results.json`](results/tournament_results.json) (20 `TEST` seeds `1000..1019`, horizon `300`, `SCORE_DEATH = -500`) and [`rl/weights/dqn_final_eval.json`](rl/weights/dqn_final_eval.json) (200 unseen `VAL` seeds `20020..20219`).*
+*Source: [`results/tournament_results.json`](results/tournament_results.json) (100 `TEST` seeds `1000..1099`, horizon `300`, `SCORE_DEATH = -500`) and [`rl/weights/dqn_final_eval.json`](rl/weights/dqn_final_eval.json) (200 unseen `VAL` seeds `20020..20219`).*
 
-| Rank | Agent | Paradigm | Score (Mean ± 95% CI) | Pellets / 150 | Survival | Wins | Blunder Rate | Latency |
+| Rank | Agent | Paradigm | Score (Mean ± 95% CI) | Pellets / 150 | Survival | Wins (100 ep) | Blunder Rate | Latency |
 | :---: | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **1** | **DQN (raw network)** | Deep RL (26ch Dilated CNN) | **675.5 ± 151.1** | **110.05** | 15.0% | 0 | 1.19% | 0.88 ms |
-| **2** | **DQN (+inference heuristics)** | Deep RL + Anti-Orbit | **626.5 ± 191.5** | 102.65 | 20.0% | 0 | 1.15% | 0.84 ms |
-| **3** | **Greedy Heuristic** | Expert Symbolic Rules | **508.5 ± 297.5** | 85.85 | 30.0% | 0 | 0.00% | 0.03 ms |
-| **4** | **Q-Learning (Textbook TD)** | Classical Linear TD | **476.5 ± 320.2** | 85.15 | 15.0% | 2 | 0.00% | 0.01 ms |
-| **5** | **RL (Policy Optimized, CEM)** | Evolutionary Search | **279.5 ± 212.7** | 75.45 | 5.0% | 0 | 0.00% | 0.01 ms |
-| **6** | **System 1 [Simulator]** | Heuristic Stand-In | **-141.5 ± 75.7** | 35.85 | 0.0% | 0 | 0.00% | 95.3 ms* |
-| **7** | **Random Agent (Baseline)** | Noise Floor | **-411.5 ± 17.6** | 8.85 | 0.0% | 0 | 6.16% | 0.00 ms |
+| **1** | **DQN (raw network)** | Deep RL (26ch Dilated CNN) | **654.4 ± 67.0** | **107.44** | 16.0% | **0** | 1.62% | 1.12 ms |
+| **2** | **DQN (+inference heuristics)** | Deep RL + Anti-Orbit | **611.2 ± 70.0** | 103.62 | 15.0% | **0** | 1.18% | 1.09 ms |
+| **3** | **Greedy Heuristic** | Expert Symbolic Rules | **506.9 ± 115.7** | 89.69 | 20.0% | 2 | 0.00% | 0.03 ms |
+| **4** | **Q-Learning (Textbook TD)** | Classical Linear TD | **443.0 ± 114.8** | 86.80 | 11.0% | 4 | 0.00% | 0.01 ms |
+| **5** | **RL (Policy Optimized, CEM)** | Evolutionary Search | **295.9 ± 116.6** | 72.09 | 9.0% | **6** | 0.00% | 0.02 ms |
+| **6** | **System 1 [Simulator]** | Heuristic Stand-In | **174.5 ± 121.9** | 59.95 | 12.0% | 3 | 0.00% | 95.0 ms* |
+| **7** | **Random Agent (Baseline)** | Noise Floor | **-400.7 ± 10.5** | 9.93 | 0.0% | 0 | 5.20% | 0.00 ms |
 
 *\*Synthetic latency from offline heuristic simulator.*
 
