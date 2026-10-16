@@ -145,8 +145,11 @@ def observe(
 def greedy_action(policy_net, obs, legal) -> str:
     """Pure greedy argmax over legal actions (ties broken by the global RNG)."""
     grid, scalars = obs
+    device = next(policy_net.parameters()).device
     with torch.no_grad():
-        q = policy_net(torch.from_numpy(grid).unsqueeze(0), torch.from_numpy(scalars).unsqueeze(0)).squeeze(0)
+        g = torch.from_numpy(grid).unsqueeze(0).to(device)
+        s = torch.from_numpy(scalars).unsqueeze(0).to(device)
+        q = policy_net(g, s).squeeze(0)
     legal_q = {m: q[ACTION_TO_IDX[m]].item() for m in legal}
     best = max(legal_q.values())
     return random.choice([m for m in legal if legal_q[m] == best])
@@ -467,12 +470,15 @@ def _atomic_torch_save(obj, path: str) -> None:
 def _rng_snapshot(rng: random.Random) -> dict:
     """All RNG streams the trainer consumes, as weights_only-loadable primitives."""
     np_name, np_keys, np_pos, np_has_gauss, np_gauss = np.random.get_state()
-    return {
+    snap = {
         "trainer": rng.getstate(),
         "python": random.getstate(),
         "numpy": (np_name, np_keys.tolist(), np_pos, np_has_gauss, np_gauss),
         "torch": torch.get_rng_state(),
     }
+    if torch.cuda.is_available():
+        snap["torch_cuda"] = torch.cuda.get_rng_state()
+    return snap
 
 
 def _rng_restore(rng: random.Random, snap: dict) -> None:
@@ -481,6 +487,8 @@ def _rng_restore(rng: random.Random, snap: dict) -> None:
     np_name, np_keys, np_pos, np_has_gauss, np_gauss = snap["numpy"]
     np.random.set_state((np_name, np.array(np_keys, dtype=np.uint32), np_pos, np_has_gauss, np_gauss))
     torch.set_rng_state(snap["torch"])
+    if "torch_cuda" in snap and torch.cuda.is_available():
+        torch.cuda.set_rng_state(snap["torch_cuda"])
 
 
 def default_training_state_path(save_path: str = DEFAULT_MODEL_PATH) -> str:
@@ -640,6 +648,7 @@ def train_dqn(
     final_val_episodes: int = 200,
     num_threads: Optional[int] = None,
     egocentric: bool = False,
+    device: Optional[str] = None,
 ):
     """Train (or resume training) the DQN for a budget of `total_steps` environment steps
     (warm-up excluded; the last episode is cut at the budget). Alternatively, an episode budget
@@ -749,9 +758,13 @@ def train_dqn(
     csv_path = os.path.join(weights_dir, "dqn_training_metrics.csv")
     final_eval_path = os.path.join(weights_dir, "dqn_final_eval.json")
 
-    device = torch.device("cpu")
-    policy_net = PacmanDQN(egocentric=egocentric).to(device)
-    target_net = PacmanDQN(egocentric=egocentric).to(device)
+    if device is None or device == "auto":
+        device_obj = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    else:
+        device_obj = torch.device(device)
+
+    policy_net = PacmanDQN(egocentric=egocentric).to(device_obj)
+    target_net = PacmanDQN(egocentric=egocentric).to(device_obj)
     target_net.load_state_dict(policy_net.state_dict())
     target_net.eval()
 
@@ -772,6 +785,10 @@ def train_dqn(
         policy_net.load_state_dict(ckpt["policy_net"])
         target_net.load_state_dict(ckpt["target_net"])
         optimizer.load_state_dict(ckpt["optimizer"])
+        for state in optimizer.state.values():
+            for k, v in state.items():
+                if isinstance(v, torch.Tensor):
+                    state[k] = v.to(device_obj)
         replay_buffer.load_state_dict(ckpt["replay_buffer"])
         prog = ckpt["progress"]
         start_episode, steps_done, epsilon = prog["episodes_done"], prog["steps_done"], prog["epsilon"]
@@ -796,8 +813,8 @@ def train_dqn(
         _atomic_torch_save({
             "version": TRAINING_STATE_VERSION,
             "config": config,
-            "policy_net": policy_net.state_dict(),
-            "target_net": target_net.state_dict(),
+            "policy_net": {k: v.cpu() for k, v in policy_net.state_dict().items()},
+            "target_net": {k: v.cpu() for k, v in target_net.state_dict().items()},
             "optimizer": optimizer.state_dict(),
             "replay_buffer": replay_buffer.state_dict(),
             "progress": {
@@ -830,7 +847,7 @@ def train_dqn(
             log_print("======================================================================")
             log_print(f" DEEP Q-NETWORK (DQN) TRAINING: {NUM_CHANNELS} grid planes + {NUM_SCALARS} scalars")
             log_print("======================================================================")
-            log_print(f"Device: {device} ({num_threads} threads) | Framing: {framing_str}")
+            log_print(f"Device: {device_obj} ({num_threads} threads) | Framing: {framing_str}")
             log_print(f"Batch Size: {batch_size} | Learning Rate: {lr} | Gamma: {gamma} (n-step: {n_step}) | Seed: {seed}")
             log_print(f"Budget: {budget_str} | Horizon: {max_steps} | Target: {target_mode} | "
                       f"Update: every {train_every} step(s) (replay ratio {batch_size / train_every:g}) | Buffer: {buffer_capacity:,}")
@@ -925,18 +942,28 @@ def train_dqn(
                     # checkpointed step counter, so resumed runs update at the same steps)
                     if len(replay_buffer) >= batch_size and steps_done % train_every == 0:
                         batch = replay_buffer.sample(batch_size, beta)
-                        curr_q = policy_net(batch["grids"], batch["scalars"]).gather(1, batch["actions"])
+                        b_grids = batch["grids"].to(device_obj)
+                        b_scalars = batch["scalars"].to(device_obj)
+                        b_actions = batch["actions"].to(device_obj)
+                        b_next_grids = batch["next_grids"].to(device_obj)
+                        b_next_scalars = batch["next_scalars"].to(device_obj)
+                        b_next_masks = batch["next_action_masks"].to(device_obj)
+                        b_rewards = batch["rewards"].to(device_obj)
+                        b_dones = batch["dones"].to(device_obj)
+                        b_weights = batch["weights"].to(device_obj)
+
+                        curr_q = policy_net(b_grids, b_scalars).gather(1, b_actions)
 
                         # Double DQN target computation
                         with torch.no_grad():
-                            next_q_online = policy_net(batch["next_grids"], batch["next_scalars"])
-                            best_next_actions = masked_next_actions(next_q_online, batch["next_action_masks"])
-                            next_target_q = target_net(batch["next_grids"], batch["next_scalars"]).gather(1, best_next_actions)
-                            expected_q = batch["rewards"] + gamma_n * next_target_q * (1.0 - batch["dones"])
+                            next_q_online = policy_net(b_next_grids, b_next_scalars)
+                            best_next_actions = masked_next_actions(next_q_online, b_next_masks)
+                            next_target_q = target_net(b_next_grids, b_next_scalars).gather(1, best_next_actions)
+                            expected_q = b_rewards + gamma_n * next_target_q * (1.0 - b_dones)
 
                         td_errors = expected_q - curr_q
                         per_item_loss = nn.functional.smooth_l1_loss(curr_q, expected_q, reduction="none")
-                        loss = (batch["weights"] * per_item_loss).mean()
+                        loss = (b_weights * per_item_loss).mean()
                         replay_buffer.update_priorities(batch["indices"], td_errors.detach().squeeze(1).cpu().numpy())
                         ep_losses.append(loss.item())
 
@@ -977,17 +1004,19 @@ def train_dqn(
                         validations_done = max(validations_done + 1, steps_done // val_every_steps)
                     else:
                         validations_done += 1
-                    # Validation re-seeds the global RNG; preserve the training stream afterwards.
                     py_state, np_state, torch_state = random.getstate(), np.random.get_state(), torch.get_rng_state()
+                    cuda_state = torch.cuda.get_rng_state() if torch.cuda.is_available() else None
                     val_sc, val_pel = evaluate_dqn(policy_net, episodes=val_episodes, max_steps=max_steps)
                     random.setstate(py_state); np.random.set_state(np_state); torch.set_rng_state(torch_state)
+                    if cuda_state is not None:
+                        torch.cuda.set_rng_state(cuda_state)
 
                     mark = ""
                     if val_sc > best_val_score:
                         best_val_score = val_sc
                         best_val_episode = ep + 1
                         best_val_steps = steps_done
-                        _atomic_torch_save(policy_net.state_dict(), save_path)
+                        _atomic_torch_save({k: v.cpu() for k, v in policy_net.state_dict().items()}, save_path)
                         mark = " [* SAVED BEST]"
 
                     ep_str = f"Ep {ep+1:04d}" if episodes is None else f"Ep {ep+1:04d}/{episodes}"
@@ -1043,8 +1072,8 @@ def train_dqn(
             # Unbiased re-check: seeds right after the selection seeds, never used to pick a checkpoint.
             seeds = val_seeds(final_val_episodes, offset=val_episodes)
             log_print(f"\nFinal re-evaluation on {len(seeds)} unseen VAL seeds ({seeds[0]}..{seeds[-1]})...")
-            best_net = PacmanDQN(egocentric=egocentric).to(device)
-            best_net.load_state_dict(torch.load(save_path, map_location=device, weights_only=True))
+            best_net = PacmanDQN(egocentric=egocentric).to(device_obj)
+            best_net.load_state_dict(torch.load(save_path, map_location=device_obj, weights_only=True))
             final_eval = {
                 "seeds": [seeds[0], seeds[-1]],
                 "selection_seeds": [val_seeds(val_episodes)[0], val_seeds(val_episodes)[-1]],
@@ -1120,6 +1149,8 @@ if __name__ == "__main__":
                         help="Unseen VAL seeds for the final re-evaluation of best/final weights (0 = skip)")
     parser.add_argument("--threads", type=int, default=None,
                         help=f"Torch intra-op threads (default {default_num_threads()} = 3/4 of logical CPUs)")
+    parser.add_argument("--device", type=str, default=None,
+                        help="Torch device for training ('cuda', 'cpu', or 'auto'; default: auto detects CUDA)")
     args = parser.parse_args()
 
     hyper = {
@@ -1135,7 +1166,7 @@ if __name__ == "__main__":
         parser.error(f"--resume uses the checkpoint's hyperparameters; drop {', '.join('--' + k.replace('_', '-') for k in passed)}")
 
     common = dict(checkpoint_every=args.checkpoint_every, stop_after=args.stop_after, make_plots=not args.no_plots,
-                  final_val_episodes=args.final_val_episodes, num_threads=args.threads)
+                  final_val_episodes=args.final_val_episodes, num_threads=args.threads, device=args.device)
     if args.resume:
         train_dqn(resume=True, checkpoint_path=args.checkpoint_path
                   or default_training_state_path(), **common)
