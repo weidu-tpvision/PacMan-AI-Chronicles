@@ -700,8 +700,8 @@ def train_dqn(
         if ckpt.get("version") != TRAINING_STATE_VERSION:
             raise ValueError(f"Unsupported training state version {ckpt.get('version')!r} in {checkpoint_path}")
         cfg = ckpt["config"]
-        total_steps = cfg.get("total_steps")
-        episodes = cfg.get("episodes")
+        total_steps = total_steps if total_steps is not None else cfg.get("total_steps")
+        episodes = episodes if episodes is not None else cfg.get("episodes")
         lr, batch_size, gamma = cfg["lr"], cfg["batch_size"], cfg["gamma"]
         n_step = cfg.get("n_step", 1)
         epsilon_start, epsilon_min, epsilon_decay_fraction = cfg["epsilon_start"], cfg["epsilon_min"], cfg["epsilon_decay_fraction"]
@@ -853,7 +853,9 @@ def train_dqn(
                       f"Update: every {train_every} step(s) (replay ratio {batch_size / train_every:g}) | Buffer: {buffer_capacity:,}")
             log_print(f"Validation: {val_episodes} VAL seeds {val_str} (pure greedy policy)")
             log_print(f"Training state: {os.path.relpath(checkpoint_path)} every {checkpoint_every} episodes\n")
-            log_print(f"Warming up replay buffer with {warmup_steps:,} random-policy steps...")
+        if len(replay_buffer) < warmup_steps:
+            needed = warmup_steps - len(replay_buffer)
+            log_print(f"Warming up replay buffer with {needed:,} steps...")
 
             # ---- Warm-up phase (uniform random policy) ----
             env = Environment(seed=train_seed(rng))
@@ -1162,14 +1164,17 @@ if __name__ == "__main__":
         "seed": args.seed, "save_path": args.save_path, "egocentric": args.egocentric,
     }
     passed = {k: v for k, v in hyper.items() if v is not None}
-    if args.resume and passed:
-        parser.error(f"--resume uses the checkpoint's hyperparameters; drop {', '.join('--' + k.replace('_', '-') for k in passed)}")
+    resumable_overrides = {"total_steps": args.total_steps, "episodes": args.episodes}
+    resumable_passed = {k: v for k, v in resumable_overrides.items() if v is not None}
+    non_resumable = {k: v for k, v in passed.items() if k not in resumable_overrides}
+    if args.resume and non_resumable:
+        parser.error(f"--resume uses the checkpoint's hyperparameters; drop {', '.join('--' + k.replace('_', '-') for k in non_resumable)}")
 
     common = dict(checkpoint_every=args.checkpoint_every, stop_after=args.stop_after, make_plots=not args.no_plots,
                   final_val_episodes=args.final_val_episodes, num_threads=args.threads, device=args.device)
     if args.resume:
         train_dqn(resume=True, checkpoint_path=args.checkpoint_path
-                  or default_training_state_path(), **common)
+                  or default_training_state_path(), **resumable_passed, **common)
     else:
         train_dqn(checkpoint_path=args.checkpoint_path, **passed, **common)
 
